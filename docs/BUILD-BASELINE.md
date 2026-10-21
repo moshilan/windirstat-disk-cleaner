@@ -91,3 +91,7 @@ https://learn.microsoft.com/en-us/cpp/overview/what-s-new-for-msvc?view=msvc-180
 ## 2026-10-22首次云端验证结果
 
 上述本机工具链阻塞通过GitHub标准Windows Runner绕开，未安装本地工具。第一次云端Release x64编译、合成只读扫描和Artifact上传均成功，0警告、0错误，未修改上游业务源码或构建配置。本机GUI仍未启动验收，详见FIRST-CLOUD-BUILD.md。
+
+## 2026-10-22中文与树图阶段
+
+本轮修改语言资源及UI默认渲染参数，新增双语合成导出复验，云端构建再次通过。本机独立合成目录的空间、大文件、重复组、语言往返切换、平面视觉、定位、缩放和隐藏恢复检查通过；具体范围与未验证项见UI-REFINEMENT.md。前文未执行状态为早期基线记录。

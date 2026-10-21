@@ -3,7 +3,7 @@
 基于WinDirStat保留空间分析、大文件识别和重复检测，计划新增垃圾清理及安全保护。
 
 - 固定上游：`49d81479c034cd7dd2cc03bd007a1d41d779840f`，源码版本字段为2.10.0，不等同于已验证正式发行版。
-- 当前状态：首次云端Release x64构建及合成只读扫描通过，产物哈希和依赖已检查；本机GUI人工验收待执行，清理模块尚未开发。本地未安装大型工具链。
+- 当前状态：中文界面与柔和平面树图已实现，云端Release x64编译、双语合成扫描及本机合成数据GUI检查通过；高DPI等扩展验证待补，垃圾清理模块尚未开发。本地未安装大型工具链。
 - 来源和许可证：[docs/UPSTREAM.md](docs/UPSTREAM.md)
 - 环境、构建阻塞和后续验证：[docs/BUILD-BASELINE.md](docs/BUILD-BASELINE.md)
 - 实施方案、阶段和验收：[docs/pm-20261021-cleanup-ac.md](docs/pm-20261021-cleanup-ac.md)
@@ -11,6 +11,7 @@
 - 云端构建与首次公开操作：[docs/CLOUD-BUILD.md](docs/CLOUD-BUILD.md)
 - 公开前检查范围及限制：[docs/PUBLIC-REVIEW.md](docs/PUBLIC-REVIEW.md)
 - 首次构建结果与本机只读GUI步骤：[docs/FIRST-CLOUD-BUILD.md](docs/FIRST-CLOUD-BUILD.md)
+- 当前中文与树图修改、构建及验收：[docs/UI-REFINEMENT.md](docs/UI-REFINEMENT.md)
 
 不对用户真实C盘和回收站运行破坏性测试；所有文件操作验证须限定在合成数据或隔离虚拟磁盘。
 
