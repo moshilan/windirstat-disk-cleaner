@@ -87,3 +87,7 @@ https://learn.microsoft.com/en-us/cpp/overview/what-s-new-for-msvc?view=msvc-180
 用户确认暂不安装本地大型工具链，改用公开GitHub仓库及标准托管Runner。新增工作流构建Release x64，前面的Debug命令仅保留为历史尝试记录，不是当前推荐入口。
 
 工作流和本地静态校验已准备；首次云端构建、云端合成扫描以及本机GUI启动仍未执行。后续操作见CLOUD-BUILD.md。
+
+## 2026-10-22首次云端验证结果
+
+上述本机工具链阻塞通过GitHub标准Windows Runner绕开，未安装本地工具。第一次云端Release x64编译、合成只读扫描和Artifact上传均成功，0警告、0错误，未修改上游业务源码或构建配置。本机GUI仍未启动验收，详见FIRST-CLOUD-BUILD.md。

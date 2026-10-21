@@ -10,7 +10,7 @@
 | 导入日期 | 2026-10-21，Asia/Shanghai |
 | 公开准备分支 | codex/public-cloud-build |
 | 上游基线标签 | upstream-baseline/49d81479 |
-| Remote | upstream指向官方仓库；未建立本项目发布远程，未push |
+| Remote | upstream指向官方仓库；origin为https://github.com/moshilan/windirstat-disk-cleaner.git公开Fork |
 | 历史完整性 | 从上一轮已核验的本地官方源码克隆，保留提交对象；当前是浅仓库，不能声称包含完整历史 |
 | 许可证 | GPL-3.0-or-later；保留LICENSE.md、源码声明及第三方声明 |
 
@@ -36,3 +36,5 @@ git diff upstream-baseline/49d81479 -- windirstat setup tests build.cmd windirst
 公开准备分支从上述固定上游提交重新接入去标识后的项目文档与CI配置，保留上游SHA，不改写原开发分支。原开发分支仅留本地；它的初始化提交含有旧本机路径，不在公开准备分支的祖先链中。
 
 首次发布仅推送明确的公开准备分支，不使用--all、--mirror或无选择地推送标签。完整步骤见CLOUD-BUILD.md。
+
+2026-10-22首次远程验证：只推送codex/public-cloud-build的审核提交ab323d72bf3dad95c4c558fecdec87c8fd3da923；服务器Fork保留官方master，未推送其他本地分支或标签。首次构建成功，详见FIRST-CLOUD-BUILD.md。

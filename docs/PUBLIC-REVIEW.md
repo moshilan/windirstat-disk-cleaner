@@ -25,7 +25,7 @@
 - 仅推送`codex/public-cloud-build`到自己的公开Fork，不推送原开发分支。
 - 不使用--all、--mirror或全量标签推送，也不把旧开发分支合并回来。
 - 不上传.local、artifacts、.git、.env和个人配置目录；忽略规则不是历史清理工具，必须保持分支祖先边界。
-- 当前仍只有官方upstream远程，本轮未创建公开仓库或新增发布远程，也未推送。
+- 公开准备阶段仅有官方upstream；随后用户明确授权首次构建验证，创建moshilan/windirstat-disk-cleaner公开Fork并添加origin，只推送已审核公开分支。详细结果见FIRST-CLOUD-BUILD.md。
 - 后续若补全上游历史，来源应是官方仓库；本轮不能声称审过那些未下载的对象。
 
 ## Artifact范围

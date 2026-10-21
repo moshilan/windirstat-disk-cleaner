@@ -1,6 +1,6 @@
 # 手动云端构建与首次公开操作
 
-日期：2026-10-22。工作流已配置并完成本地静态检查，尚未创建远程、推送、触发Actions或生成EXE。
+日期：2026-10-22。工作流配置及首次远程验证已完成，Release x64构建、合成只读扫描和产物校验通过。实际运行记录见FIRST-CLOUD-BUILD.md。
 
 ## 构建配置
 
@@ -31,7 +31,7 @@
 
 ## 首次创建公开仓库与推送
 
-以下仅为后续操作说明，本轮未执行。
+以下为首次配置操作说明；本项目已按用户授权完成一轮，后续核对实际状态时以FIRST-CLOUD-BUILD.md为准，不重复创建Fork或添加origin。
 
 1. 登录GitHub，在官方https://github.com/windirstat/windirstat 创建自己的公开Fork。Fork已具有上游历史，适合当前本地浅仓库。不要把本机整个目录通过网页拖拽上传。
 2. 本地确认处于`codex/public-cloud-build`且工作区干净，阅读PUBLIC-REVIEW.md。原开发分支仅保留在本地，不推送。
@@ -53,10 +53,10 @@ git push -u origin codex/public-cloud-build
 
 ## 账户与费用边界
 
-使用公开仓库的标准GitHub托管Runner，不申请larger Runner，不使用矩阵、自动push触发或定时任务。计算使用按GitHub公开标准Runner政策处理；Artifact设置7天且不上传PDB以控制存储。账户策略、Actions启用状态和首次运行限制尚未检查。
+使用公开仓库的标准GitHub托管Runner，不申请larger Runner，不使用矩阵、自动push触发或定时任务。计算使用按GitHub公开标准Runner政策处理；Artifact设置7天且不上传PDB以控制存储。首次已确认仓库公开、Actions启用且标准Runner运行成功，未启用任何付费服务。
 
 ## 本轮已验证与尚未验证
 
 已验证：YAML解析、PowerShell语法、所有内联PowerShell语法、xxHash真实文件哈希及错误哈希拒绝路径、公开准备分支范围与提交邮箱、上游业务源码未变。
 
-尚未验证：GitHub工作流实际调度、Runner预装组件、MSBuild编译、生成EXE依赖、真实程序的合成扫描、本机GUI运行。未安装本地大型工具链，未创建仓库或推送。
+首次远程验证另已确认：工作流调度、Runner预装组件、MSBuild编译、EXE依赖和真实程序的合成扫描。尚未验证本机GUI人工操作、真实用户数据场景和旧系统兼容；未安装本地大型工具链，没有真实清理或删除。
