@@ -67,12 +67,28 @@ jobs:
       - name: Read-only scan of synthetic data only
         run: ./.github/scripts/Test-SyntheticScan.ps1 -Executable build/WinDirStat_x64.exe -OutputDirectory artifacts/records
 
+      - name: Verify scan policy and measure synthetic workloads
+        run: |
+          $reportRoot = Join-Path $env:RUNNER_TEMP 'scan-policy-results'
+          # Keep fixtures so the selected tests perform no deletion; the disposable runner owns cleanup.
+          pwsh -NoProfile -STA -File tests/Test-WinDirStat.ps1 -ExePath build/WinDirStat_x64.exe -Scenario scan.policy,scan.workloads -KeepArtifacts -RequireAll -OutputPath $reportRoot
+          $testExit = $LASTEXITCODE
+          if (Test-Path (Join-Path $reportRoot 'results.json')) {
+            $report = Get-Content (Join-Path $reportRoot 'results.json') -Raw | ConvertFrom-Json
+            $report.Results | Select-Object Id,Status,Checks,Seconds,Notes |
+              ConvertTo-Json -Depth 8 | Set-Content artifacts/records/scan-policy.json -Encoding utf8
+          }
+          if ($testExit -ne 0) { throw "Scan policy regression failed: $testExit" }
+
       - name: Package portable EXE and licenses
         run: |
           Copy-Item build/WinDirStat_x64.exe artifacts/WinDirStat.exe
           Copy-Item LICENSE.md artifacts/LICENSE.md
           Copy-Item windirstat/res/license.txt artifacts/WinDirStat-LICENSE.txt
           Copy-Item contrib/xxhash/LICENSE artifacts/xxHash-LICENSE.txt
+          # Keep the delivered portable configuration separate from all test instances.
+          @('[Options]', 'AutoElevate=0', 'UseFastScanEngine=1', 'SampleLargeFiles=0', '[DupeView]', 'ScanForDuplicates=0') |
+            Set-Content artifacts/WinDirStat.ini -Encoding utf8
           & $env:DUMPBIN_EXE /dependents artifacts/WinDirStat.exe | Out-File artifacts/records/dependencies.txt -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw 'Dependency inspection failed.' }
           $hash = (Get-FileHash artifacts/WinDirStat.exe -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -84,6 +100,7 @@ jobs:
           name: windirstat-portable-x64-${{ github.sha }}
           path: |
             artifacts/WinDirStat.exe
+            artifacts/WinDirStat.ini
             artifacts/LICENSE.md
             artifacts/WinDirStat-LICENSE.txt
             artifacts/xxHash-LICENSE.txt

@@ -944,6 +944,7 @@ void CWinDirStatModel::OnScanStop()
 
 void CWinDirStatModel::StopScanningEngine(StopReason stopReason)
 {
+    if (IsScanRunning() && stopReason != Abort) m_scanStopRequested.store(true);
     // Interrupt blocking I/O (e.g. ReadFile on large files) in worker threads
     // so they reach WaitIfSuspended promptly. Without this, SuspendExecution
     // hangs indefinitely waiting for AllThreadsIdling() while a thread reads.
@@ -969,6 +970,35 @@ void CWinDirStatModel::StopScanningEngine(StopReason stopReason)
 
     // Resume the shared clock if a scan is stopped or replaced while suspended.
     CItem::ResumeScanClock();
+    if (stopReason == Abort) m_scanPhase.store(ScanPhase::Idle);
+}
+
+std::wstring CWinDirStatModel::GetScanStatusText() const
+{
+    const auto phase = m_scanPhase.load();
+    const auto started = m_scanStarted.load();
+    if (!HasRootItem() || phase == ScanPhase::Idle || started == 0) return {};
+
+    std::wstring_view label;
+    switch (phase)
+    {
+    case ScanPhase::Scanning:
+        label = m_scanDuplicates.load() ? IDS_SCAN_PHASE_DUPLICATES : IDS_SCAN_PHASE_SPACE;
+        break;
+    case ScanPhase::Hardlinks: label = IDS_SCAN_PHASE_HARDLINKS; break;
+    case ScanPhase::Finalizing: label = IDS_SCAN_PHASE_FINALIZING; break;
+    case ScanPhase::Complete: label = IDS_SCAN_PHASE_COMPLETE; break;
+    case ScanPhase::Stopped: label = IDS_SCAN_PHASE_STOPPED; break;
+    case ScanPhase::Incomplete: label = IDS_SCAN_INCOMPLETE; break;
+    default: return {};
+    }
+
+    // Wall-clock duration deliberately includes pauses and post-enumeration work.
+    const auto ended = m_scanEnded.load();
+    const auto seconds = ((ended != 0 ? ended : GetTickCount64()) - started) / 1000;
+    const auto elapsed = std::format(L"{:02}:{:02}:{:02}", seconds / 3600, seconds / 60 % 60, seconds % 60);
+    const auto files = GetRootItem()->IsTypeOrFlag(IT_FILE) ? 1 : GetRootItem()->GetFilesCount();
+    return Localization::Format(IDS_SCAN_STATUS, Localization::Lookup(label), elapsed, FormatCount(files));
 }
 
 void CWinDirStatModel::OnContextMenuExplore(const UINT nID)
@@ -1170,6 +1200,11 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
 
     // Start a thread so we do not hang the message loop during inserts.
     // Lambda captures assume the model exists for the duration of the scan.
+    m_scanStarted.store(GetTickCount64());
+    m_scanEnded.store(0);
+    m_scanDuplicates.store(COptions::ScanForDuplicates);
+    m_scanStopRequested.store(false);
+    m_scanPhase.store(items.empty() ? ScanPhase::Finalizing : ScanPhase::Scanning);
     m_thread = std::jthread([this,items, visualInfo] () mutable
     {
         std::unordered_map<const CItem*, FinderBasicContext> folderContexts;
@@ -1252,6 +1287,8 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
         // tree is torn down.
         if (stopReason == Abort)
         {
+            m_scanEnded.store(GetTickCount64());
+            m_scanPhase.store(ScanPhase::Idle);
             CMainFrame::Get()->InvokeInMessageThread([]
             {
                 CMainFrame::Get()->SetProgressComplete();
@@ -1279,6 +1316,7 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
 
         // Handle hardlink counting for the drive
         auto drives = GetRootItem()->GetDriveItems();
+        if (COptions::ProcessHardlinks && !drives.empty()) m_scanPhase.store(ScanPhase::Hardlinks);
         if (COptions::ProcessHardlinks) std::for_each(std::execution::par, drives.begin(), drives.end(), [](auto* drive)
         {
             // Existing snapshots belong to drives untouched by this scan.
@@ -1294,6 +1332,7 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
                 drive->RemoveHardlinksItem();
             }
         });
+        m_scanPhase.store(ScanPhase::Finalizing);
         // After hardlink adjustment GetProgressPos() holds the corrected scan-based size.
         // Resync the progress range to this value so position and range share exactly the
         // same calculation basis — they will converge to 100%, not drop to 99%.
@@ -1393,6 +1432,10 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
                 // Restore selection if previously set
                 if (visualInfo[item].isSelected) GetFocusControl()->SelectItem(item, false, true);
             }
+            m_scanEnded.store(GetTickCount64());
+            m_scanPhase.store(stopReason == Stop || m_scanStopRequested.load() ? ScanPhase::Stopped :
+                GetRootItem()->IsTypeOrFlag(ITF_SCANERROR) ? ScanPhase::Incomplete : ScanPhase::Complete);
+            CMainFrame::Get()->UpdatePaneText();
         });
 
         // Present remote failures after the scan UI has settled.

@@ -635,7 +635,9 @@ bool CSelectDrivesDlg::OnInitDialog()
     DarkMode::AdjustControls(Handle());
 
     // Restore local scan preferences.
-    SetChecked(IDC_SCAN_DUPLICATES, COptions::ScanForDuplicates);
+    // Each new target selection requires an explicit request for content hashing.
+    // Do not change the running scan's mode until SaveSelection accepts the dialog.
+    SetChecked(IDC_SCAN_DUPLICATES, false);
     SetChecked(IDC_FAST_SCAN_CHECKBOX, COptions::UseFastScanEngine);
     SetActiveRadio(IDC_RADIO_TARGET_DRIVES_ALL + COptions::SelectDrivesRadio);
     m_selectedDrives = COptions::SelectDrivesDrives;

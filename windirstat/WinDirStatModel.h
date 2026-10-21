@@ -101,6 +101,7 @@ public:
     bool IsRootDone() const;
     bool IsScanRunning() const;
     bool IsScanSettled() const;
+    std::wstring GetScanStatusText() const;
     void RunPendingHeapCleanup();
     CItem* GetRootItem() const { return m_rootItem; }
     CItem* GetZoomItem() const { return m_zoomItem; }
@@ -175,6 +176,12 @@ private:
     std::vector<CItem*> m_reselectChildStack; // Stack for the "Re-select Child"-Feature
 
     std::unordered_map<std::wstring, BlockingQueue<CItem*>> m_queues; // The scanning and thread queue
+    enum class ScanPhase : std::uint8_t { Idle, Scanning, Hardlinks, Finalizing, Complete, Stopped, Incomplete };
+    std::atomic<ScanPhase> m_scanPhase = ScanPhase::Idle;
+    std::atomic<ULONGLONG> m_scanStarted = 0;
+    std::atomic<ULONGLONG> m_scanEnded = 0;
+    std::atomic_bool m_scanDuplicates = false;
+    std::atomic_bool m_scanStopRequested = false;
     std::atomic_bool m_heapMinPending = false;
     std::future<void> m_heapMinTask; // Heap cleanup that does not extend scan state
     std::jthread m_thread; // Wrapper thread so we do not occupy the UI thread

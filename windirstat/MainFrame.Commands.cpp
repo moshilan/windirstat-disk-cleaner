@@ -331,8 +331,10 @@ void CMainFrame::MoveFocus(const LOGICAL_FOCUS logicalFocus)
 void CMainFrame::UpdatePaneText()
 {
     const auto focus = GetLogicalFocus();
-    std::wstring fileSelectionText = !CWinDirStatModel::Get()->IsScanRunning() ?
-        Localization::Lookup(IDS_IDLEMESSAGE) : wds::strEmpty;
+    const bool scanning = CWinDirStatModel::Get()->IsScanRunning();
+    const auto scanStatus = CWinDirStatModel::Get()->GetScanStatusText();
+    std::wstring fileSelectionText = scanning ? wds::strEmpty :
+        !scanStatus.empty() ? scanStatus : Localization::Lookup(IDS_IDLEMESSAGE);
     ULONGLONG size = MAXULONGLONG;
     bool logicalSize = COptions::TreeMapUseLogical;
 
@@ -389,7 +391,9 @@ void CMainFrame::UpdatePaneText()
     CClientDC dc(this);
     const GdiObjectSelection selectFont(&dc, GetAppFont(m_hWnd));
     SetStatusPaneText(dc, CStatusBar::PaneId::Idle, fileSelectionText);
-    SetStatusPaneText(dc, CStatusBar::PaneId::Size, (size == MAXULONGLONG) ? wds::strEmpty :
+    // The Idle pane hosts the progress control while scanning; use the otherwise empty Size pane.
+    SetStatusPaneText(dc, CStatusBar::PaneId::Size, scanning && !scanStatus.empty() ? scanStatus :
+        (size == MAXULONGLONG) ? wds::strEmpty :
         std::format(L"{}: \u2211 {}", Localization::Lookup(logicalSize ?
             IDS_COL_SIZE_LOGICAL : IDS_COL_SIZE_PHYSICAL), FormatBytes(size)), 175);
     SetStatusPaneText(dc, CStatusBar::PaneId::Ram, CDirStatApp::GetCurrentProcessMemoryInfo(), 175);

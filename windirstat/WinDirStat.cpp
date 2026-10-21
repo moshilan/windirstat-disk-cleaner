@@ -408,8 +408,9 @@ bool CDirStatApp::InitInstance()
     if (hideApp && (cmdInfo.GetPath().empty() || cmdInfo.HasInvalidPath())) ExitProcess(1);
     if (hideApp) m_nCmdShow = SW_HIDE;
 
-    if (!m_saveToPath.empty()) COptions::ScanForDuplicates = false;
-    else if (!m_saveDupesToPath.empty()) COptions::ScanForDuplicates = true;
+    // Duplicate hashing is opt-in for this scan, never inherited from an earlier session.
+    // Quiet duplicate export is an explicit request; other startup paths only analyze space.
+    COptions::ScanForDuplicates = !m_saveDupesToPath.empty();
 
     m_model = std::make_unique<CWinDirStatModel>();
 

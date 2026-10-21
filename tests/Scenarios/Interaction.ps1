@@ -461,7 +461,7 @@ function Test-DeduplicateGroups {
         foreach ($member in 'a', 'b') { New-TestFile (Join-Path $root "group-$group-$member.bin") 32768 $group }
     })
     $hashes = @($paths | Get-FileHash | ForEach-Object Hash)
-    $app = Start-TestApp @($root) -Settings @{ DupeView = @{ ScanForDuplicates = 1 } }
+    $app = Start-TestApp @($root) -ScanDuplicates
     Get-AppList $app -AllFiles | Out-Null
     Invoke-AppCommand $app 'ID_VIEW_DUPLICATE_FILES'
     $list = Get-AppList $app
@@ -492,7 +492,7 @@ function Test-DuplicateBatchUpdates {
             New-TestFile (Join-Path $root "stable\group-$group-$member.bin") 32768 $group
         }
     })
-    $app = Start-TestApp @($root) -Settings @{ DupeView = @{ ScanForDuplicates = 1 } }
+    $app = Start-TestApp @($root) -ScanDuplicates
     Get-AppList $app -AllFiles | Out-Null
     Invoke-AppCommand $app 'ID_VIEW_DUPLICATE_FILES'
     $list = Get-AppList $app

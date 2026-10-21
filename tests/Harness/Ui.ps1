@@ -7,10 +7,23 @@ function Start-TestApp {
     param(
         [string[]] $Roots = @(), [object] $Runner, [hashtable] $Settings = @{},
         [string[]] $Arguments = @(), [switch] $DuringScan, [string[]] $LanguageLines = @(),
-        [int] $Width = 1100, [int] $Height = 760, [switch] $Hidden
+        [int] $Width = 1100, [int] $Height = 760, [switch] $Hidden, [switch] $ScanDuplicates
     )
+    if ($ScanDuplicates) {
+        if ($Roots.Count -ne 1 -or $Arguments.Count -or -not [IO.Path]::IsPathFullyQualified($Roots[0])) {
+            throw 'Explicit duplicate scans require one absolute synthetic folder and no extra arguments.'
+        }
+        $null = Assert-OwnedPath $Roots[0]
+        $rootPath = Get-NormalPath $Roots[0]
+        $fixturePath = Get-NormalPath $script:Context.Fixture
+        if (($rootPath -ne $fixturePath -and -not $rootPath.StartsWith($fixturePath + '\')) -or
+            -not [IO.Directory]::Exists($Roots[0])) {
+            throw 'Explicit duplicate scans must stay within the current synthetic fixture.'
+        }
+    }
     if (-not $Runner) { $Runner = New-TestRunner $Settings $LanguageLines }
-    $process = Start-TestProcess $Runner (@($Arguments) + $Roots) -Hidden:$Hidden
+    $startArguments = if ($ScanDuplicates) { @() } else { @($Arguments) + $Roots }
+    $process = Start-TestProcess $Runner $startArguments -Hidden:$Hidden
     $app = [pscustomobject]@{
         Process = $process; Runner = $Runner; Window = [IntPtr]::Zero; Roots = $Roots
         ExpectExit = $false; TreeList = [IntPtr]::Zero; ExtensionList = [IntPtr]::Zero
@@ -29,6 +42,22 @@ function Start-TestApp {
             [Math]::Min($Width, $screen.Width - 40), [Math]::Min($Height, $screen.Height - 40))
         [TestDesktop]::KeepVisible($app.Window)
         [TestDesktop]::Activate($app.Window)
+    }
+    if ($ScanDuplicates) {
+        $dialog = Wait-Until { Get-AppDialog $app 'IDC_SCAN_DUPLICATES' } 'The initial scan target dialog opens'
+        Set-DialogCheck $dialog 'IDC_RADIO_TARGET_FOLDER' $true
+        $folder = Get-DialogControl $dialog 'IDC_BROWSE_FOLDER'
+        [TestDesktop]::SetText($folder, $Roots[0])
+        # Notify the editable combo so target validation and the scan button update.
+        [void] [TestDesktop]::Message($dialog, 0x0111,
+            (5 -shl 16) -bor (Get-ResourceId 'IDC_BROWSE_FOLDER'), $folder.ToInt64())
+        Set-DialogCheck $dialog 'IDC_SCAN_DUPLICATES' $true
+        Assert-Equal ([TestDesktop]::Message((Get-DialogControl $dialog 'IDC_RADIO_TARGET_FOLDER'), 0x00F0).ToInt32()) 1 `
+            'The accepted duplicate-scan target is a folder, never a drive'
+        Assert-Equal ([TestDesktop]::ControlText($folder)) $Roots[0] 'The only accepted root is the synthetic fixture'
+        Assert-Equal ([TestDesktop]::Message((Get-DialogControl $dialog 'IDC_SCAN_DUPLICATES'), 0x00F0).ToInt32()) 1 `
+            'Duplicate hashing is explicitly selected for this scan'
+        Close-AppDialog $dialog 1
     }
     if (-not $DuringScan -and ($Roots.Count -or $Arguments.Count)) { Wait-AppIdle $app }
     return $app

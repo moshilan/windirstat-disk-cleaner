@@ -85,8 +85,8 @@ function Test-PauseResumeScan {
     Copy-Item -LiteralPath $first -Destination $duplicates[1]
     Copy-Item -LiteralPath $first -Destination $duplicates[2]
     $app = Start-TestApp @($root) -Settings @{
-        Options = @{ UseFastScanEngine = 0; ScanningThreads = $Case.Threads }; DupeView = @{ ScanForDuplicates = 1 }
-    } -DuringScan
+        Options = @{ UseFastScanEngine = 0; ScanningThreads = $Case.Threads }
+    } -ScanDuplicates -DuringScan
     Wait-AppScanning $app
     Invoke-AppCommand $app 'ID_SCAN_SUSPEND'
     Wait-Until {
@@ -131,8 +131,8 @@ function Test-StopAndRescan {
     param($Context, $Case)
     $root = New-StressTree
     $app = Start-TestApp @($root) -Settings @{
-        Options = @{ ScanningThreads = $Case.Threads }; DupeView = @{ ScanForDuplicates = 1 }
-    } -DuringScan
+        Options = @{ ScanningThreads = $Case.Threads }
+    } -ScanDuplicates -DuringScan
     Wait-AppScanning $app
     if ($Case.Suspended) {
         Invoke-AppCommand $app 'ID_SCAN_SUSPEND'
@@ -156,7 +156,7 @@ function Test-StopAndRescan {
 function Test-ScanResizeOverlap {
     param($Context, $Case)
     $root = New-StressTree
-    $app = Start-TestApp @($root) -Settings @{ Options = @{ ScanningThreads = 1 }; DupeView = @{ ScanForDuplicates = 1 } } `
+    $app = Start-TestApp @($root) -Settings @{ Options = @{ ScanningThreads = 1 } } -ScanDuplicates `
         -DuringScan
     Wait-AppScanning $app
     [void] [TestDesktop]::Message($app.Window, 0x0231)
@@ -205,7 +205,7 @@ function Test-ExternalMutationDuringScan {
     $root = New-StressTree -Count $script:ExtendedStressFileCount
     $worker = Start-FixtureMutation $root
     Wait-Until { Test-Path -LiteralPath $worker.Ready } 'External mutations have begun' | Out-Null
-    $app = Start-TestApp @($root) -Settings @{ Options = @{ ScanningThreads = 16 }; DupeView = @{ ScanForDuplicates = 1 } } `
+    $app = Start-TestApp @($root) -Settings @{ Options = @{ ScanningThreads = 16 } } -ScanDuplicates `
         -DuringScan
     Wait-AppScanning $app
     Invoke-AppCommand $app 'ID_SCAN_SUSPEND'
@@ -228,8 +228,8 @@ function Test-ExtensionGroupingDuringScan {
     param($Context, $Case)
     $root = New-StressTree
     $app = Start-TestApp @($root) -Settings @{
-        Options = @{ UseFastScanEngine = 0; ScanningThreads = 1 }; DupeView = @{ ScanForDuplicates = 1 }
-    } -DuringScan
+        Options = @{ UseFastScanEngine = 0; ScanningThreads = 1 }
+    } -ScanDuplicates -DuringScan
     Wait-AppScanning $app
     Invoke-AppCommand $app 'ID_SCAN_SUSPEND'
     Wait-Until { (Get-AppCommandState $app 'ID_SCAN_RESUME').Enabled } 'The scan suspends' | Out-Null
