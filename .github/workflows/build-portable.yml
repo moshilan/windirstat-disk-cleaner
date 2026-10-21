@@ -1,0 +1,101 @@
+name: Build portable x64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout selected project commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check installed toolchain and record source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path artifacts/records -Force | Out-Null
+          git merge-base --is-ancestor 49d81479c034cd7dd2cc03bd007a1d41d779840f HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Expected upstream baseline is not an ancestor.' }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products '*' -version '[18.0,19.0)' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 Microsoft.VisualStudio.Component.VC.ATL -property installationPath
+          if (-not $vs) { throw 'VS2026 C++ tools and ATL must be preinstalled.' }
+          $toolsVersion = (Get-Content -LiteralPath "$vs\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt" -Raw).Trim()
+          $msbuild = "$vs\MSBuild\Current\Bin\MSBuild.exe"
+          $dumpbin = "$vs\VC\Tools\MSVC\$toolsVersion\bin\Hostx64\x64\dumpbin.exe"
+          foreach ($required in @($msbuild, $dumpbin, "$vs\VC\Tools\MSVC\$toolsVersion\atlmfc\include\atlbase.h", "$vs\MSBuild\Microsoft\VC\v180\Platforms\x64\PlatformToolsets\v145\Toolset.props", "${env:ProgramFiles(x86)}\Windows Kits\10\Include\10.0.26100.0\um\Windows.h")) {
+            if (-not (Test-Path -LiteralPath $required)) { throw "Missing preinstalled toolchain component: $required" }
+          }
+          "MSBUILD_EXE=$msbuild" >> $env:GITHUB_ENV
+          "DUMPBIN_EXE=$dumpbin" >> $env:GITHUB_ENV
+          [ordered]@{
+            source_commit = (git rev-parse HEAD)
+            upstream_baseline = '49d81479c034cd7dd2cc03bd007a1d41d779840f'
+            reachable_commit_count = (git rev-list --count --all)
+            runner_image = $env:ImageVersion
+            visual_studio = (Get-Content -LiteralPath "$vs\VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt" -Raw).Trim()
+            msbuild = (& $msbuild -version -nologo | Select-Object -Last 1)
+            sdk = '10.0.26100.0'
+            configuration = 'Release x64'
+            run_url = "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
+          } | ConvertTo-Json | Set-Content artifacts/records/build-info.json -Encoding utf8
+
+      - name: Restore SHA256-verified xxHash
+        run: |
+          ./.github/scripts/Restore-XXHash.ps1
+          Copy-Item .github/dependencies/xxhash.json artifacts/records/xxhash-lock.json
+
+      - name: Build existing Release x64 solution
+        run: |
+          & $env:MSBUILD_EXE windirstat.sln /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/msbuild.log;verbosity=normal'
+          if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE" }
+          if (-not (Test-Path -LiteralPath build/WinDirStat_x64.exe)) { throw 'Expected portable EXE is missing.' }
+          git diff --stat | Out-File artifacts/records/generated-changes.txt -Encoding utf8
+          Get-FileHash contrib/xxhash/xxhash.h,contrib/xxhash/xxhash.c -Algorithm SHA256 |
+            Select-Object @{Name='File';Expression={Split-Path $_.Path -Leaf}},Hash |
+            ConvertTo-Json | Set-Content artifacts/records/post-build-dependency-hashes.json -Encoding utf8
+
+      - name: Read-only scan of synthetic data only
+        run: ./.github/scripts/Test-SyntheticScan.ps1 -Executable build/WinDirStat_x64.exe -OutputDirectory artifacts/records
+
+      - name: Package portable EXE and licenses
+        run: |
+          Copy-Item build/WinDirStat_x64.exe artifacts/WinDirStat.exe
+          Copy-Item LICENSE.md artifacts/LICENSE.md
+          Copy-Item windirstat/res/license.txt artifacts/WinDirStat-LICENSE.txt
+          Copy-Item contrib/xxhash/LICENSE artifacts/xxHash-LICENSE.txt
+          & $env:DUMPBIN_EXE /dependents artifacts/WinDirStat.exe | Out-File artifacts/records/dependencies.txt -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency inspection failed.' }
+          $hash = (Get-FileHash artifacts/WinDirStat.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  WinDirStat.exe" | Set-Content artifacts/SHA256SUMS.txt -Encoding ascii
+
+      - name: Upload portable program
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: windirstat-portable-x64-${{ github.sha }}
+          path: |
+            artifacts/WinDirStat.exe
+            artifacts/LICENSE.md
+            artifacts/WinDirStat-LICENSE.txt
+            artifacts/xxHash-LICENSE.txt
+            artifacts/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload build records even after failure
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: build-records-${{ github.sha }}
+          path: artifacts/records/
+          if-no-files-found: warn
+          retention-days: 7

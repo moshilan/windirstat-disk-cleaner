@@ -1,3 +1,22 @@
+# C盘清理工具开发基线
+
+基于WinDirStat保留空间分析、大文件识别和重复检测，计划新增垃圾清理及安全保护。
+
+- 固定上游：`49d81479c034cd7dd2cc03bd007a1d41d779840f`，源码版本字段为2.10.0，不等同于已验证正式发行版。
+- 当前状态：固定源码和云端构建工作流已准备；本地不安装大型工具链。首次云端构建、扫描和本机GUI运行尚未验证；清理模块尚未开发。
+- 来源和许可证：[docs/UPSTREAM.md](docs/UPSTREAM.md)
+- 环境、构建阻塞和后续验证：[docs/BUILD-BASELINE.md](docs/BUILD-BASELINE.md)
+- 实施方案、阶段和验收：[docs/pm-20261021-cleanup-ac.md](docs/pm-20261021-cleanup-ac.md)
+- 工作记录：[WORKLOG.md](WORKLOG.md)
+- 云端构建与首次公开操作：[docs/CLOUD-BUILD.md](docs/CLOUD-BUILD.md)
+- 公开前检查范围及限制：[docs/PUBLIC-REVIEW.md](docs/PUBLIC-REVIEW.md)
+
+不对用户真实C盘和回收站运行破坏性测试；所有文件操作验证须限定在合成数据或隔离虚拟磁盘。
+
+以下保留上游README内容。其兼容性和功能说明是上游声明，不代表本项目本轮运行验证结果。
+
+---
+
 # WinDirStat - Windows Directory Statistics
 
 ## Description

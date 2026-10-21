@@ -17,3 +17,12 @@ intermediate/
 
 # Specific Files
 /windirstat/res/LangStrings.h
+
+# Local project evidence, synthetic fixtures and development environment
+/.local/
+/.codex/
+/.agents/
+/.env
+/.env.*
+!/.env.example
+/artifacts/
