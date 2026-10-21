@@ -156,7 +156,7 @@ CAboutDlg::CAboutDlg()
 
 std::wstring CAboutDlg::GetAppVersion()
 {
-    return std::format(L"{} ({})\nGit Commit: {}", GetAppTitle(),
+    return Localization::Format(IDS_APP_VERSION, GetAppTitle(),
         _CRT_WIDE(GIT_DATE), _CRT_WIDE(GIT_COMMIT));
 }
 

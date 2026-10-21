@@ -65,6 +65,28 @@ if ($dupes.Count -ne 2 -or @(Compare-Object $expectedDupes $actualDupes).Count -
     throw 'Incorrect duplicate group in synthetic report.'
 }
 if (@($dupes | Select-Object -ExpandProperty 'Hash Prefix' -Unique).Count -ne 1) { throw 'Duplicates are not grouped together.' }
+# Omitting LanguageId exercises the new Simplified Chinese default, with no external language files.
+@('[Options]', 'AutoElevate=0', 'ShowElevationPrompt=1', 'UseBackupRestore=0', 'UseFastScanEngine=0', 'SampleLargeFiles=0') |
+    Set-Content -LiteralPath (Join-Path $appRoot 'WinDirStat.ini') -Encoding utf8
+$chineseSpaceReport = Join-Path $testRoot 'space-zh.json'
+$chineseDupeReport = Join-Path $testRoot 'duplicates-zh.json'
+Invoke-Scan '/SaveTo' $chineseSpaceReport
+Invoke-Scan '/SaveDupesTo' $chineseDupeReport
+$chineseSpace = @(Get-Content -LiteralPath $chineseSpaceReport -Raw | ConvertFrom-Json)
+$chineseDupes = @(Get-Content -LiteralPath $chineseDupeReport -Raw | ConvertFrom-Json)
+foreach ($sample in $before) {
+    $row = @($chineseSpace | Where-Object { $_.'名称' -eq (Join-Path $inputRoot $sample.Name) })
+    if ($row.Count -ne 1 -or $row[0].'逻辑大小' -ne $sample.Bytes) {
+        throw "Incorrect Chinese space report for synthetic file: $($sample.Name)"
+    }
+}
+$chineseRoot = @($chineseSpace | Where-Object { $_.'名称'.TrimEnd('\') -eq $inputRoot.TrimEnd('\') })
+if ($chineseRoot.Count -ne 1 -or $chineseRoot[0].'逻辑大小' -ne 1179660) { throw 'Incorrect Chinese logical total.' }
+$chineseNames = @($chineseDupes | ForEach-Object { [IO.Path]::GetFileName($_.'名称') })
+if ($chineseDupes.Count -ne 2 -or @(Compare-Object $expectedDupes $chineseNames).Count -ne 0 -or
+    @($chineseDupes | Select-Object -ExpandProperty '哈希前缀' -Unique).Count -ne 1) {
+    throw 'Incorrect Chinese duplicate group.'
+}
 $after = @(Get-ChildItem -LiteralPath $inputRoot -File | Sort-Object Name | ForEach-Object {
     [pscustomobject]@{ Name = $_.Name; Bytes = $_.Length; SHA256 = (Get-FileHash -LiteralPath $_.FullName).Hash }
 })
@@ -77,6 +99,7 @@ if (($before | ConvertTo-Json -Compress) -cne ($after | ConvertTo-Json -Compress
     logical_bytes = 1179660
     largest_file = 'large-unique.bin'
     duplicate_groups = 1
+    languages = @('en (explicit)', 'zh (default)')
     input_unchanged = $true
     samples = $before
 } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutputDirectory 'synthetic-smoke.json') -Encoding utf8

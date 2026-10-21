@@ -300,7 +300,8 @@ public:
     inline static Setting<int> UserDefinedCleanupCount{ OptionsCleanups, L"Count", 0, 0, std::numeric_limits<int>::max() };
     inline static Setting<int> DarkMode{ OptionsGeneral, L"DarkMode", DM_USE_WINDOWS, DM_DISABLED, DM_USE_WINDOWS };
     inline static Setting<int> FontSizePercent{ OptionsGeneral, L"FontSizePercent", 0, 0, 200 };
-    inline static Setting<int> LanguageId{ OptionsGeneral, L"LanguageId", 0 };
+    inline static Setting<int> LanguageId{ OptionsGeneral, L"LanguageId",
+        static_cast<int>(LocaleNameToLCID(L"zh", LOCALE_ALLOW_NEUTRAL_NAMES)) };
     inline static Setting<int> ProcessPriority{ OptionsGeneral, L"ProcessPriority",
         NORMAL, LOW, HIGH, SelectionBind(IDC_PROCESS_PRIORITY) };
     inline static Setting<int> FileHashAlgorithm{ OptionsGeneral, L"FileHashAlgorithm",

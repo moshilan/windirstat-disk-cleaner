@@ -253,7 +253,7 @@ public:
     static std::unique_ptr<CItem> BuildDemoTree();
 
     // Good values
-    static Options GetDefaults() { return GetPreset(Preset::Classic); }
+    static Options GetDefaults() { return GetPreset(Preset::Flat); }
     enum class Preset : std::uint8_t
     {
         Classic, Calm, Flat, Pastel, HighContrast

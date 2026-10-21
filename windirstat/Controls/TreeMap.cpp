@@ -271,8 +271,9 @@ CTreeMap::Options CTreeMap::GetPreset(const Preset preset)
     switch (preset)
     {
     case Preset::Flat:
-        options.saturation = 0.85;
+        options.saturation = 0.45;
         options.height = 0.0;
+        options.scaleFactor = 0.0;
         options.ambientLight = 1.0;
         break;
     case Preset::Pastel:

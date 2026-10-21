@@ -475,7 +475,7 @@ std::wstring TranslateError(const HRESULT hr)
         nullptr, hr, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
         reinterpret_cast<LPWSTR>(&lpMsgBuf), 0, nullptr) == 0)
     {
-        return std::format(L"Windows error {:#08x}", static_cast<DWORD>(hr));
+        return Localization::Format(IDS_WINDOWS_ERROR, static_cast<DWORD>(hr));
 
     }
     return static_cast<LPWSTR>(*lpMsgBuf);
@@ -501,7 +501,7 @@ bool ShellExecuteWrapper(const std::wstring& lpFile, const std::wstring& lpParam
     if (process != nullptr) *process = sei.hProcess;
     if (!bResult && GetLastError() != ERROR_CANCELLED)
     {
-        DisplayError(L"ShellExecute failed: " + TranslateError(GetLastError()));
+        DisplayError(Localization::Format(IDS_SHELL_EXECUTE_ERROR, TranslateError(GetLastError())));
     }
     return bResult;
 }
