@@ -139,6 +139,9 @@ public static class TestDesktop
     }
 
     public static void MoveCursor(int x, int y) => SetCursorPos(x, y);
+    [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
+    public static void LeftButton(bool down) => mouse_event(down ? 2u : 4u, 0, 0, 0, UIntPtr.Zero);
+    public static IntPtr WindowAt(int x, int y) => WindowFromPoint(new POINT { X = x, Y = y });
 
     public static IntPtr TransferCapture(IntPtr currentOwner, IntPtr window)
     {

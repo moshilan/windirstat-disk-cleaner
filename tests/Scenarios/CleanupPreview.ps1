@@ -65,19 +65,67 @@ function Move-CleanupDivider {
     # injected button coordinates together instead of racing two positions.
     [TestDesktop]::MoveCursor($originX + $x, $originY + $y)
     Start-Sleep -Milliseconds 100
-    [void] [TestDesktop]::Message($Dialog, 0x0201, 1, $point)
-    Assert-Equal ([TestDesktop]::CaptureOwner($Dialog)) $Dialog 'A preview divider acquires mouse capture'
-    $point = (($y + $Offset) -shl 16) -bor ($x -band 0xFFFF)
-    [TestDesktop]::MoveCursor($originX + $x, $originY + $y + $Offset)
-    Wait-Until { ([TestDesktop]::Rectangle($Above)[3] - $upper[3]) -eq $Offset } `
-        'The captured native cursor move settles at the requested divider position' -StableMilliseconds 150 | Out-Null
-    [void] [TestDesktop]::Message($Dialog, 0x0202, 0, $point)
+    Assert-Equal ([TestDesktop]::WindowAt($originX + $x, $originY + $y)) $Dialog 'A divider is reachable by native pointer hit testing'
+    [TestDesktop]::LeftButton($true)
+    try {
+        Wait-Until { [TestDesktop]::CaptureOwner($Dialog) -eq $Dialog } 'A native divider press acquires mouse capture' | Out-Null
+        [TestDesktop]::MoveCursor($originX + $x, $originY + $y + $Offset)
+        Wait-Until { ([TestDesktop]::Rectangle($Above)[3] - $upper[3]) -eq $Offset } `
+            'The captured native cursor move settles at the requested divider position' -StableMilliseconds 150 | Out-Null
+    } finally { [TestDesktop]::LeftButton($false) }
+    Wait-Until { [TestDesktop]::CaptureOwner($Dialog) -eq [IntPtr]::Zero } 'Releasing the native divider press releases capture' | Out-Null
     $movedUpper = [TestDesktop]::Rectangle($Above)
     $movedLower = [TestDesktop]::Rectangle($Below)
     Assert-Equal ($movedUpper[3] - $upper[3]) $Offset 'The upper preview region follows the divider'
     Assert-Equal ($movedLower[1] - $lower[1]) $Offset 'The lower preview region follows the divider'
     Assert-True ($movedUpper[3] -lt $movedLower[1]) 'Dragging preserves a gap between preview regions'
     Assert-Equal ([TestDesktop]::CaptureOwner($Dialog)) ([IntPtr]::Zero) 'Finishing a divider drag releases capture'
+}
+
+function Click-CleanupFilter {
+    param([IntPtr] $Dialog, [bool] $Expected)
+    $button = Get-DialogControl $Dialog 'IDC_CP_HIDE_ZERO'
+    $rect = [TestDesktop]::Rectangle($button)
+    [TestDesktop]::Activate($Dialog)
+    [TestDesktop]::MoveCursor($rect[0] + 8, [int](($rect[1] + $rect[3]) / 2))
+    [TestDesktop]::LeftButton($true)
+    Start-Sleep -Milliseconds 80
+    [TestDesktop]::LeftButton($false)
+    Wait-Until { [TestDesktop]::Message($button, 0x00F0).ToInt32() -eq [int]$Expected } `
+        'A native filter click reaches the requested checked state' -StableMilliseconds 150 | Out-Null
+}
+
+function Resize-CleanupByPointer {
+    param([IntPtr] $Dialog)
+    $rect = [TestDesktop]::Rectangle($Dialog)
+    $midX = [int](($rect[0] + $rect[2]) / 2)
+    $midY = [int](($rect[1] + $rect[3]) / 2)
+    $edges = @(
+        @(($rect[0] + 3), $midY, 12, 0, 10), @(($rect[2] - 3), $midY, -12, 0, 11),
+        @($midX, ($rect[1] + 3), 0, 12, 12), @($midX, ($rect[3] - 3), 0, -12, 15),
+        @(($rect[0] + 3), ($rect[1] + 3), 12, 12, 13), @(($rect[2] - 3), ($rect[1] + 3), -12, 12, 14),
+        @(($rect[0] + 3), ($rect[3] - 3), 12, -12, 16), @(($rect[2] - 3), ($rect[3] - 3), -12, -12, 17)
+    )
+    foreach ($edge in $edges) {
+        $x, $y, $dx, $dy, $hit = $edge
+        $point = ($y -shl 16) -bor ($x -band 0xFFFF)
+        Assert-Equal ([TestDesktop]::Message($Dialog, 0x0084, 0, $point).ToInt32()) $hit `
+            'Each window edge and corner exposes its native sizing hit region'
+        [TestDesktop]::Activate($Dialog)
+        [TestDesktop]::MoveCursor($x, $y)
+        [TestDesktop]::LeftButton($true)
+        try {
+            Start-Sleep -Milliseconds 150
+            [TestDesktop]::MoveCursor($x + $dx, $y + $dy)
+            Wait-Until {
+                $current = [TestDesktop]::Rectangle($Dialog)
+                ($dx -eq 0 -or $current[2] - $current[0] -lt $rect[2] - $rect[0]) -and
+                    ($dy -eq 0 -or $current[3] - $current[1] -lt $rect[3] - $rect[1])
+            } 'A real edge or corner drag can shrink the initial preview' -StableMilliseconds 150 | Out-Null
+        } finally { [TestDesktop]::LeftButton($false) }
+        Wait-Until { [TestDesktop]::CaptureOwner($Dialog) -eq [IntPtr]::Zero } 'The native sizing loop ends after release' | Out-Null
+        [TestDesktop]::Position($Dialog, $rect[0], $rect[1], $rect[2] - $rect[0], $rect[3] - $rect[1])
+    }
 }
 
 function Test-CleanupPreview {
@@ -103,7 +151,7 @@ function Test-CleanupPreview {
     New-CleanupFixtureFile (Join-Path $local 'Google\Chrome\User Data\Default\Service Worker\CacheStorage\personal') | Out-Null
     New-CleanupFixtureFile (Join-Path $local 'pip\Cache\wheels\package.whl') | Out-Null
     $before = @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash)
-    $runner = New-TestRunner @{ Options = @{ LanguageId = $Case.Language } }
+    $runner = New-TestRunner @{ Options = @{ LanguageId = $Case.Language; FontSizePercent = $Case.FontSize } }
     $runner | Add-Member -NotePropertyName Environment -NotePropertyValue @{ WDS_CLEANUP_TEST_ROOT = $root }
     $app = Start-TestApp -Runner $runner
     $selection = Wait-Until { Get-AppDialog $app 'IDC_SCAN_DUPLICATES' } 'Initial target selection is cancelled without scanning any disk'
@@ -121,6 +169,7 @@ function Test-CleanupPreview {
         'The native preview has a valid size and fits entirely in the working area'
     $files = Get-DialogControl $dialog 'IDC_CP_FILES'
     $categories = Get-DialogControl $dialog 'IDC_CP_CATEGORIES'
+    Resize-CleanupByPointer $dialog
     $initialFiles = [TestDesktop]::Rectangle($files)
     $width = $rectangle[2] - $rectangle[0]
     $height = $rectangle[3] - $rectangle[1]
@@ -201,16 +250,23 @@ function Test-CleanupPreview {
         'Sorted rows still show the matching complete path and rule details' | Out-Null
     Invoke-CleanupButton $dialog 'IDC_CP_SELECT_ALL'
     $unfilteredTotals = Get-CleanupTotalsWithoutVisible $dialog
-    Invoke-CleanupButton $dialog 'IDC_CP_HIDE_ZERO'
+    Click-CleanupFilter $dialog $true
     Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) ($expected.Count - 1) 'The zero-allocation filter hides exactly one row'
     Assert-True ($zero -notin [NativeListViewHelper]::GetItemTexts($files)) 'The zero-allocation candidate is hidden'
     Assert-Equal (Get-CleanupTotalsWithoutVisible $dialog) $unfilteredTotals `
         'Filtering changes neither total allocation nor hidden checked candidates'
     Assert-Sequence @([NativeListViewHelper]::GetItemTexts($categories, 1)) $counts `
         'Filtering does not change category counts'
+    for ($toggle = 0; $toggle -lt 3; ++$toggle) {
+        Click-CleanupFilter $dialog $false
+        Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) $expected.Count 'Repeated native clicks restore empty files'
+        Click-CleanupFilter $dialog $true
+        Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) ($expected.Count - 1) 'Repeated native clicks hide empty files'
+        Assert-Equal (Get-CleanupTotalsWithoutVisible $dialog) $unfilteredTotals 'Repeated toggles preserve all original check states and totals'
+    }
     Invoke-CleanupButton $dialog 'IDC_CP_SELECT_NONE'
     Invoke-CleanupButton $dialog 'IDC_CP_SELECT_ALL'
-    Invoke-CleanupButton $dialog 'IDC_CP_HIDE_ZERO'
+    Click-CleanupFilter $dialog $false
     Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) $expected.Count 'Disabling the filter restores every candidate'
     $zeroRow = [array]::IndexOf([NativeListViewHelper]::GetItemTexts($files), $zero)
     Assert-Equal ([TestDesktop]::Message($files, 0x102C, $zeroRow, 0xF000).ToInt32() -band 0xF000) 0x1000 `
@@ -316,6 +372,6 @@ function Test-CleanupPreview {
 }
 
 Register-Scenario cleanup.preview CleanupPreview 'Read-only cleanup categories, selection, exclusions and cancellation' `
-    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 9 }
+    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 9; FontSize = 100 }
 Register-Scenario cleanup.preview.zh CleanupPreview 'Chinese read-only cleanup preview and failure explanations' `
-    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 30724 }
+    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 30724; FontSize = 200 }

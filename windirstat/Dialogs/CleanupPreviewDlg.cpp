@@ -143,6 +143,15 @@ bool CCleanupPreviewDlg::OnInitDialog()
     m_layout.AddControl(IDC_CP_HIDE_ZERO, 0, 0, 0, 0);
     m_layout.AddControl(IDCANCEL, 1, 1, 0, 0);
     m_layout.OnInitDialog(true);
+    const auto window = GetWindowRect();
+    const auto client = GetClientRect();
+    const auto categories = GetChildWindowRect(m_categories.Handle());
+    const auto files = GetChildWindowRect(m_files.Handle());
+    const auto details = GetChildWindowRect(GetDlgItem(IDC_CP_DETAILS).Handle());
+    const auto lastButton = GetChildWindowRect(GetDlgItem(IDC_CP_SELECT_NONE).Handle());
+    const auto closeButton = GetChildWindowRect(GetDlgItem(IDCANCEL).Handle());
+    m_minimumSize = CSize(lastButton.right + closeButton.Width() + categories.left * 2 + window.Width() - client.Width(),
+        window.Height() - categories.Height() - files.Height() - details.Height() + ScaleForDpi(65 + 64 + 32));
     m_layoutReady = true;
     MONITORINFO monitor{ sizeof(monitor) };
     if (::GetMonitorInfoW(::MonitorFromWindow(Handle(), MONITOR_DEFAULTTONEAREST), &monitor))
@@ -167,6 +176,7 @@ bool CCleanupPreviewDlg::OnInitDialog()
 void CCleanupPreviewDlg::OnGetMinMaxInfo(MINMAXINFO* info)
 {
     CLayoutDialog::OnGetMinMaxInfo(info);
+    if (m_minimumSize.cx > 0) info->ptMinTrackSize = { m_minimumSize.cx, m_minimumSize.cy };
     MONITORINFO monitor{ sizeof(monitor) };
     if (::GetMonitorInfoW(::MonitorFromWindow(Handle(), MONITOR_DEFAULTTONEAREST), &monitor))
     {
@@ -189,11 +199,12 @@ void CCleanupPreviewDlg::LayoutPanes()
     auto files = GetChildWindowRect(m_files.Handle());
     auto details = GetChildWindowRect(GetDlgItem(IDC_CP_DETAILS).Handle());
     const int minimum = ScaleForDpi(32);
+    const int fileMinimum = ScaleForDpi(64);
     const int categoryMinimum = ScaleForDpi(65);
     m_categoryDelta = std::clamp(m_categoryDelta, categoryMinimum - categories.Height(),
-        files.Height() + details.Height() - 2 * minimum);
+        std::max(categoryMinimum - categories.Height(), files.Height() + details.Height() - fileMinimum - minimum));
     m_detailDelta = std::clamp(m_detailDelta, minimum - details.Height(),
-        files.Height() - m_categoryDelta - minimum);
+        std::max(minimum - details.Height(), files.Height() - m_categoryDelta - fileMinimum));
     categories.bottom += m_categoryDelta;
     files.top += m_categoryDelta;
     files.bottom -= m_detailDelta;
@@ -245,10 +256,11 @@ void CCleanupPreviewDlg::OnLButtonDown(UINT, const CPoint point)
         m_dragY = point.y;
         ::SetCapture(Handle());
     }
+    else CallDefaultHandler();
 }
 void CCleanupPreviewDlg::OnMouseMove(UINT, const CPoint point)
 {
-    if (!m_dragging || ::GetCapture() != Handle()) return;
+    if (!m_dragging || ::GetCapture() != Handle()) { CallDefaultHandler(); return; }
     const int delta = point.y - m_dragY;
     m_dragY = point.y;
     if (m_dragging == 1) m_categoryDelta += delta;
@@ -259,6 +271,7 @@ void CCleanupPreviewDlg::OnMouseMove(UINT, const CPoint point)
 void CCleanupPreviewDlg::OnLButtonUp(UINT, CPoint)
 {
     if (m_dragging && ::GetCapture() == Handle()) ::ReleaseCapture();
+    else CallDefaultHandler();
     m_dragging = 0;
 }
 void CCleanupPreviewDlg::OnCaptureChanged(WindowRef) { m_dragging = 0; }
@@ -273,7 +286,7 @@ bool CCleanupPreviewDlg::OnSetCursor(const WindowRef window, const UINT hit, UIN
             return true;
         }
     }
-    return false;
+    return static_cast<bool>(CallDefaultHandler());
 }
 
 void CCleanupPreviewDlg::FillFiles()
@@ -285,9 +298,8 @@ void CCleanupPreviewDlg::FillFiles()
     m_files.SetRedraw(false);
     ::SendMessageW(m_files.Handle(), LVM_DELETEALLITEMS, 0, 0);
     m_visible.clear();
-    const bool hideZero = ::IsDlgButtonChecked(Handle(), IDC_CP_HIDE_ZERO) == BST_CHECKED;
     for (size_t i = 0; i < m_result.candidates.size(); ++i)
-        if (!hideZero || m_result.candidates[i].allocatedBytes != 0) m_visible.push_back(i);
+        if (!m_hideEmpty || m_result.candidates[i].logicalBytes != 0) m_visible.push_back(i);
     if (m_sortSize) std::stable_sort(m_visible.begin(), m_visible.end(), [this](size_t a, size_t b)
     {
         const auto left = m_result.candidates[a].allocatedBytes, right = m_result.candidates[b].allocatedBytes;
@@ -326,7 +338,13 @@ void CCleanupPreviewDlg::OnColumnClick(NMHDR* header, LRESULT* result)
     *result = 0;
     if (reinterpret_cast<NMLISTVIEW*>(header)->iSubItem == 2) OnSortSize();
 }
-void CCleanupPreviewDlg::OnFilter() { if (!m_scanning && m_valid) FillFiles(); }
+void CCleanupPreviewDlg::OnFilter()
+{
+    if (m_scanning || !m_valid) return;
+    m_hideEmpty = ::IsDlgButtonChecked(Handle(), IDC_CP_HIDE_ZERO) == BST_CHECKED;
+    FillFiles();
+    GetDlgItem(IDC_CP_HIDE_ZERO).Invalidate();
+}
 
 void CCleanupPreviewDlg::SetScanning(const bool scanning)
 {

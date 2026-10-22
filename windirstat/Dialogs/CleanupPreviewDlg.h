@@ -58,6 +58,8 @@ private:
     bool m_sortSize = false;
     bool m_descending = true;
     bool m_layoutReady = false;
+    bool m_hideEmpty = false;
+    CSize m_minimumSize{ 0, 0 };
     int m_categoryDelta = 0;
     int m_detailDelta = 0;
     int m_dragging = 0;

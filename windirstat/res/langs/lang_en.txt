@@ -467,7 +467,7 @@ IDS_CP_WARN_DEPTH=The maximum preview directory depth was reached; results are i
 
 IDS_CP_SORT_DESC=Largest allocation first
 IDS_CP_SORT_ASC=Smallest allocation first
-IDS_CP_HIDE_ZERO=Hide zero allocation (view only)
+IDS_CP_HIDE_ZERO=Hide empty files (0 bytes)
 IDS_CP_VISIBLE= | Visible: {}
 IDS_CP_COVERAGE=Rule coverage status
 IDS_CP_NOT_SCANNED=Not scanned

@@ -467,7 +467,7 @@ IDS_CP_WARN_DEPTH=已达到预览目录深度上限，当前结果不完整。
 
 IDS_CP_SORT_DESC=占用从大到小
 IDS_CP_SORT_ASC=占用从小到大
-IDS_CP_HIDE_ZERO=隐藏零占用候选（仅筛选显示）
+IDS_CP_HIDE_ZERO=隐藏空文件（0 字节）
 IDS_CP_VISIBLE= | 显示：{}个
 IDS_CP_COVERAGE=规则覆盖状态
 IDS_CP_NOT_SCANNED=未扫描
