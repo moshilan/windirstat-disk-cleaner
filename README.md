@@ -12,6 +12,7 @@
 - 公开前检查范围及限制：[docs/PUBLIC-REVIEW.md](docs/PUBLIC-REVIEW.md)
 - 首次构建结果与本机只读GUI步骤：[docs/FIRST-CLOUD-BUILD.md](docs/FIRST-CLOUD-BUILD.md)
 - 当前中文与树图修改、构建及验收：[docs/UI-REFINEMENT.md](docs/UI-REFINEMENT.md)
+- 扫描性能排查、按需重复检测及新版构建：[docs/SCAN-PERFORMANCE.md](docs/SCAN-PERFORMANCE.md)
 
 不对用户真实C盘和回收站运行破坏性测试；所有文件操作验证须限定在合成数据或隔离虚拟磁盘。
 
