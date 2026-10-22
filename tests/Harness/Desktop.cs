@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
@@ -142,27 +142,20 @@ public static class TestDesktop
     [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint x, uint y, uint data, UIntPtr extra);
     public static void LeftButton(bool down) => mouse_event(down ? 2u : 4u, 0, 0, 0, UIntPtr.Zero);
     public static IntPtr WindowAt(int x, int y) => WindowFromPoint(new POINT { X = x, Y = y });
-    [DllImport("kernel32.dll")] private static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
-    [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
-    [DllImport("kernel32.dll")] private static extern IntPtr VirtualAllocEx(IntPtr process, IntPtr address, UIntPtr size, uint type, uint protect);
-    [DllImport("kernel32.dll")] private static extern bool VirtualFreeEx(IntPtr process, IntPtr address, UIntPtr size, uint type);
-    [DllImport("kernel32.dll")] private static extern bool ReadProcessMemory(IntPtr process, IntPtr address, byte[] buffer, UIntPtr size, out UIntPtr read);
     public static int[] MinimumTrackSize(IntPtr window)
     {
-        GetWindowThreadProcessId(window, out uint pid);
-        IntPtr process = OpenProcess(0x38, false, pid);
-        if (process == IntPtr.Zero) throw new InvalidOperationException("Cannot inspect test window sizing constraints.");
-        IntPtr data = VirtualAllocEx(process, IntPtr.Zero, (UIntPtr)40, 0x3000, 4);
+        // User32 marshals this system message across processes; the query
+        // buffer must belong to this caller rather than the target process.
+        IntPtr data = Marshal.AllocHGlobal(40);
         try
         {
-            if (data == IntPtr.Zero) throw new InvalidOperationException("Cannot allocate test sizing query.");
+            int[] values = new int[10];
+            Marshal.Copy(values, 0, data, values.Length);
             Message(window, 0x24, 0, data.ToInt64());
-            byte[] buffer = new byte[40];
-            if (!ReadProcessMemory(process, data, buffer, (UIntPtr)40, out UIntPtr read) || read.ToUInt64() != 40)
-                throw new InvalidOperationException("Cannot read test window sizing constraints.");
-            return new[] { BitConverter.ToInt32(buffer, 24), BitConverter.ToInt32(buffer, 28) };
+            Marshal.Copy(data, values, 0, values.Length);
+            return new[] { values[6], values[7] };
         }
-        finally { if (data != IntPtr.Zero) VirtualFreeEx(process, data, UIntPtr.Zero, 0x8000); CloseHandle(process); }
+        finally { Marshal.FreeHGlobal(data); }
     }
 
     public static IntPtr TransferCapture(IntPtr currentOwner, IntPtr window)
