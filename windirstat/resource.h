@@ -455,14 +455,23 @@
 #define IDC_CP_PROGRESS                 1217
 #define IDC_CP_SORT_SIZE                1218
 #define IDC_CP_HIDE_ZERO                1219
+#define IDC_CP_PLAN                     1220
+#define IDD_CLEANUP_PLAN                125
+#define IDC_CPLAN_FILES                 1221
+#define IDC_CPLAN_DETAILS               1222
+#define IDC_CPLAN_STATUS                1223
+#define IDC_CPLAN_MODE                  1224
+#define IDC_CPLAN_SIMULATE              1225
+#define IDC_CPLAN_STOP                  1226
+#define IDC_CPLAN_NOTICE                1227
 
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        125
+#define _APS_NEXT_RESOURCE_VALUE        126
 #define _APS_NEXT_COMMAND_VALUE         32971
-#define _APS_NEXT_CONTROL_VALUE         1220
-#define _APS_NEXT_SYMED_VALUE           125
+#define _APS_NEXT_CONTROL_VALUE         1228
+#define _APS_NEXT_SYMED_VALUE           126
 #endif
 #endif

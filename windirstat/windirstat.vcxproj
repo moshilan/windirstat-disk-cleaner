@@ -228,6 +228,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClInclude Include="Property.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="Cleanup\CleanupPreview.h" />
+    <ClInclude Include="Cleanup\CleanupPlan.h" />
+    <ClInclude Include="Dialogs\CleanupPlanDlg.h" />
     <ClInclude Include="Dialogs\CleanupPreviewDlg.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="Views\ExtensionView.h" />
@@ -252,6 +254,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Cleanup\CleanupPreview.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Cleanup\CleanupPlan.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Dialogs\CleanupPlanDlg.cpp" />
     <ClCompile Include="Dialogs\CleanupPreviewDlg.cpp" />
     <ClCompile Include="Controls\ExtensionListControl.cpp" />
     <ClCompile Include="Controls\FileDupeControl.cpp" />

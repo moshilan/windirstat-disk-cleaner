@@ -18,6 +18,7 @@ protected:
     void OnOK() override {} // Enter never closes a preview or executes anything.
 private:
     void OnScan();
+    void OnPlan();
     void OnStop();
     void OnSelectAll();
     void OnSelectNone();
@@ -59,6 +60,7 @@ private:
     CEdit m_exclusions;
     CProgressCtrl m_progressBar;
     Cleanup::ScanOptions m_options;
+    Cleanup::ScanOptions m_scanOptions;
     Cleanup::ScanResult m_result;
     Cleanup::Progress m_progress;
     std::vector<size_t> m_visible;
@@ -93,6 +95,7 @@ inline std::span<const RouteEntry> CCleanupPreviewDlg::Routes()
     static constexpr std::array entries
     {
         Route::Control<&OnScan>(BN_CLICKED, IDC_CP_SCAN),
+        Route::Control<&OnPlan>(BN_CLICKED, IDC_CP_PLAN),
         Route::Control<&OnStop>(BN_CLICKED, IDC_CP_CANCEL),
         Route::Control<&OnSelectAll>(BN_CLICKED, IDC_CP_SELECT_ALL),
         Route::Control<&OnSelectNone>(BN_CLICKED, IDC_CP_SELECT_NONE),

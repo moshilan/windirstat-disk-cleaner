@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include "Cleanup/CleanupPreview.h"
+#include "Cleanup/CleanupPlan.h"
 namespace fs = std::filesystem;
 static unsigned checks = 0;
 static void Check(bool ok, const char* message) { ++checks; if (!ok) throw std::runtime_error(message); }
@@ -77,6 +78,170 @@ static void Junction(const fs::path& link, const fs::path& target)
         DWORD(data.length) + 8, nullptr, 0, &returned, nullptr);
     if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
     Check(ok, "Synthetic junction can be created");
+}
+static void RunPlanTests(const fs::path& root, std::uint64_t now, std::uint64_t old)
+{
+    using namespace Cleanup;
+    const auto fixture = root/L"PlanTests", local = fixture/L"LocalAppData", temp = local/L"Temp";
+    const auto first = temp/L"first.tmp", second = temp/L"second.tmp";
+    Write(first, std::string(8193, 'a'), old);
+    Write(second, std::string(4097, 'b'), old);
+    Write(temp/L"personal.txt", "personal sentinel", old);
+    ScanOptions options; options.localAppData = local.wstring(); options.now = now;
+    options.enabled.fill(false); options.enabled[0] = true;
+    auto preview = Scan(options);
+    Check(!preview.incomplete && preview.candidates.size() == 2, "Plan fixture has exactly two eligible files");
+    std::vector<bool> selected(preview.candidates.size(), false);
+    const auto firstIndex = static_cast<size_t>(std::find_if(preview.candidates.begin(), preview.candidates.end(),
+        [&](const Candidate& candidate) { return candidate.path == first.wstring(); }) - preview.candidates.begin());
+    Check(firstIndex < selected.size(), "Plan selection resolves the intended candidate identity");
+    selected[firstIndex] = true;
+    const auto beforeBuild = Snapshot(fixture);
+    auto plan = BuildPlan(preview, selected, options);
+    Check(plan.Reason() == PlanReason::None && plan.Items().size() == 1 && !plan.Id().empty(),
+        "Only explicitly checked files enter a named independent plan");
+    Check(plan.Items()[0].candidate.path == first.wstring() && plan.Items()[0].disposition == Disposition::RecycleBin &&
+        plan.Items()[0].candidate.ruleId == L"user-temp-v1" && plan.Items()[0].candidate.ruleVersion == 1 &&
+        !plan.Items()[0].candidate.reasonKey.empty(), "Plan retains file, versioned rule evidence and explicit recycle disposition");
+    Check(plan.EstimatedReleaseUpperBound() == 0 && Snapshot(fixture) == beforeBuild,
+        "Building a recycle plan preserves all source bytes and does not claim released space");
+    // Every simulation is bracketed by complete path/content snapshots, including failure cases.
+    const auto simulate = [&](const CleanupPlan& input, const ScanOptions& current, std::stop_token stop = {}) {
+        const auto before = Snapshot(fixture);
+        auto result = SimulatePlan(input, current, stop);
+        Check(Snapshot(fixture) == before, "Simulation preserves every synthetic path and default-stream byte");
+        Check(result.simulationOnly && result.actualReleasedBytes == 0 && result.planId == input.Id() &&
+            result.finishedAt >= result.startedAt && result.records.size() == input.Items().size(),
+            "Simulation reports its plan, zero actual release, timestamps and one record per planned item");
+        for (size_t i = 0; i < result.records.size(); ++i)
+            Check(result.records[i].itemIndex == i && result.records[i].finishedAt >= result.records[i].startedAt,
+                "Operation records retain stable item indexes and ordered timestamps");
+        return result;
+    };
+    const auto expectSkip = [&](const CleanupPlan& input, const ScanOptions& current, PlanReason reason) {
+        const auto result = simulate(input, current);
+        Check(result.records.size() == 1 && result.records[0].state == SimulationState::Skipped &&
+            result.records[0].reason == reason && result.estimatedReleaseUpperBound == 0,
+            "Failed safety condition skips its item with the expected reason and no release estimate");
+    };
+    auto simulated = simulate(plan, options);
+    Check(simulated.records[0].state == SimulationState::Simulated && simulated.records[0].reason == PlanReason::None &&
+        simulated.estimatedReleaseUpperBound == 0, "Unchanged recycle item is simulated without claiming physical release");
+    auto permanent = BuildPlan(preview, selected, options, Disposition::PermanentDelete);
+    Check(permanent.Id() != plan.Id(), "Independent plans have distinct correlation identifiers");
+    simulated = simulate(permanent, options);
+    Check(permanent.Items()[0].disposition == Disposition::PermanentDelete &&
+        simulated.records[0].state == SimulationState::Simulated &&
+        permanent.EstimatedReleaseUpperBound() == Allocation(first) && simulated.estimatedReleaseUpperBound == Allocation(first),
+        "Explicit permanent-delete intent estimates allocation only as an upper bound and performs no deletion");
+    auto official = BuildPlan(preview, selected, options, Disposition::WindowsCleanup);
+    expectSkip(official, options, PlanReason::UnsupportedDisposition);
+    Check(official.Items()[0].disposition == Disposition::WindowsCleanup,
+        "Unsupported Windows cleanup keeps its requested disposition without fallback");
+    auto changedOptions = options; changedOptions.excludedDirectories = { temp.wstring() };
+    expectSkip(permanent, changedOptions, PlanReason::ConfigurationChanged);
+    changedOptions = options; changedOptions.protectedDirectories = { temp.wstring() };
+    expectSkip(permanent, changedOptions, PlanReason::ConfigurationChanged);
+    changedOptions = options; changedOptions.enabled[0] = false;
+    expectSkip(permanent, changedOptions, PlanReason::ConfigurationChanged);
+    changedOptions = options; changedOptions.localAppData = (fixture/L"OtherLocal").wstring();
+    expectSkip(permanent, changedOptions, PlanReason::ConfigurationChanged);
+    std::stop_source stop; stop.request_stop();
+    const auto cancelledBuild = BuildPlan(preview, selected, options, Disposition::PermanentDelete, stop.get_token());
+    Check(cancelledBuild.Reason() == PlanReason::Cancelled && cancelledBuild.EstimatedReleaseUpperBound() == 0 &&
+        cancelledBuild.Items()[0].reason == PlanReason::Cancelled, "Cancelled plan generation stops metadata checks and cannot become usable");
+    simulated = simulate(permanent, options, stop.get_token());
+    Check(simulated.records[0].state == SimulationState::Cancelled && simulated.records[0].reason == PlanReason::Cancelled &&
+        simulated.estimatedReleaseUpperBound == 0, "Cancellation records every unstarted item without retry or release");
+    auto invalid = preview; invalid.incomplete = true;
+    Check(BuildPlan(invalid, selected, options).Reason() == PlanReason::IncompletePreview,
+        "Incomplete preview cannot produce a usable cleanup plan");
+    invalid = preview; invalid.cancelled = true;
+    Check(BuildPlan(invalid, selected, options).Reason() == PlanReason::IncompletePreview,
+        "Cancelled preview cannot become a complete plan");
+    invalid = preview; invalid.limitReached = true;
+    Check(BuildPlan(invalid, selected, options).Reason() == PlanReason::IncompletePreview,
+        "Truncated preview cannot become a complete plan");
+    Check(BuildPlan(preview, std::vector<bool>(selected.size(), false), options).Reason() == PlanReason::InvalidSelection &&
+        BuildPlan(preview, {}, options).Reason() == PlanReason::InvalidSelection &&
+        BuildPlan(preview, selected, options, static_cast<Disposition>(255)).Reason() == PlanReason::InvalidSelection,
+        "Empty, mismatched and invalid-disposition requests fail closed");
+    invalid = preview; ++invalid.candidates[firstIndex].ruleVersion;
+    expectSkip(BuildPlan(invalid, selected, options), options, PlanReason::RuleChanged);
+    invalid = preview; invalid.candidates[firstIndex].ruleId = L"unregistered-rule";
+    expectSkip(BuildPlan(invalid, selected, options), options, PlanReason::RuleChanged);
+    invalid = preview; invalid.candidates.push_back(invalid.candidates[firstIndex]);
+    auto duplicateSelection = selected; duplicateSelection.push_back(true);
+    const auto duplicate = BuildPlan(invalid, duplicateSelection, options, Disposition::PermanentDelete);
+    simulated = simulate(duplicate, options);
+    Check(simulated.records.size() == 2 && simulated.records[1].reason == PlanReason::Duplicate &&
+        simulated.records[1].state == SimulationState::Skipped && simulated.estimatedReleaseUpperBound == Allocation(first),
+        "Repeated physical identity cannot inflate the release upper bound");
+    // Source vectors and later discovered files do not alter the immutable plan.
+    selected.assign(selected.size(), false); preview.candidates.clear();
+    Write(temp/L"newly-discovered.tmp", "not in the old plan", old);
+    simulated = simulate(permanent, options);
+    Check(permanent.Items().size() == 1 && simulated.records.size() == 1 && permanent.Items()[0].candidate.path == first.wstring(),
+        "Changing selection and discovery results never adds new files to the old plan");
+    std::vector<bool> all(Scan(options).candidates.size(), true);
+    auto partial = BuildPlan(Scan(options), all, options, Disposition::PermanentDelete);
+    Write(first, std::string(8193, 'z'), old); // Same length and restored visible dates; ChangeTime must still invalidate it.
+    expectSkip(permanent, options, PlanReason::FileChanged);
+    simulated = simulate(partial, options);
+    Check(std::count_if(simulated.records.begin(), simulated.records.end(), [](const OperationRecord& record) {
+        return record.state == SimulationState::Simulated; }) == 2 &&
+        std::count_if(simulated.records.begin(), simulated.records.end(), [](const OperationRecord& record) {
+            return record.reason == PlanReason::FileChanged; }) == 1,
+        "One changed file is skipped while unchanged planned items retain independent results");
+    const auto makeSingle = [&](const wchar_t* name) {
+        const auto path = temp/name; Write(path, "original payload", old);
+        auto current = Scan(options); std::vector<bool> choice(current.candidates.size(), false);
+        for (size_t i = 0; i < choice.size(); ++i) choice[i] = current.candidates[i].path == path.wstring();
+        return BuildPlan(current, choice, options, Disposition::PermanentDelete);
+    };
+    auto replaced = makeSingle(L"replacement.tmp");
+    fs::rename(temp/L"replacement.tmp", temp/L"replacement.kept");
+    Write(temp/L"replacement.tmp", "original payload", old);
+    expectSkip(replaced, options, PlanReason::IdentityChanged);
+    auto missing = makeSingle(L"missing.tmp");
+    fs::rename(temp/L"missing.tmp", temp/L"missing.kept");
+    expectSkip(missing, options, PlanReason::Unavailable);
+    auto streamPlan = makeSingle(L"streams.tmp");
+    { std::ofstream stream(temp/L"streams.tmp:user-data", std::ios::binary); stream << "named stream sentinel"; }
+    simulated = simulate(streamPlan, options);
+    Check(simulated.records[0].state == SimulationState::Skipped,
+        "A named stream added after planning prevents simulated eligibility");
+    { std::ifstream stream(temp/L"streams.tmp:user-data", std::ios::binary);
+      Check(std::string(std::istreambuf_iterator<char>(stream), {}) == "named stream sentinel", "Simulation preserves named-stream bytes"); }
+    auto linked = makeSingle(L"hardlinked.tmp");
+    Check(CreateHardLinkW((temp/L"hardlinked.kept").c_str(), (temp/L"hardlinked.tmp").c_str(), nullptr) != 0,
+        "Plan test creates a synthetic hardlink without deleting any payload");
+    simulated = simulate(linked, options);
+    Check(simulated.records[0].state == SimulationState::Skipped, "A hardlink added after planning invalidates eligibility");
+    auto locked = makeSingle(L"locked.tmp");
+    const auto beforeLock = Snapshot(fixture);
+    HANDLE lock = CreateFileW((temp/L"locked.tmp").c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+    Check(lock != INVALID_HANDLE_VALUE, "Synthetic file can be exclusively locked");
+    // Snapshot cannot open the deliberately locked payload; compare complete snapshots after releasing the lock.
+    const auto lockedResult = SimulatePlan(locked, options);
+    CloseHandle(lock);
+    Check(Snapshot(fixture) == beforeLock, "The sharing-conflict simulation preserves all fixture bytes and paths");
+    Check(lockedResult.records.size() == 1 && lockedResult.records[0].state == SimulationState::Skipped &&
+        lockedResult.records[0].systemError != 0 && lockedResult.actualReleasedBytes == 0,
+        "A sharing conflict is recorded without taking ownership, changing permissions or retrying");
+    auto repository = makeSingle(L"repository-case/payload.tmp");
+    Write(temp/L"repository-case/.git", "repository marker", old);
+    expectSkip(repository, options, PlanReason::NoLongerEligible);
+    const auto linkedDirectory = temp/L"redirected", preservedDirectory = temp/L"redirected-kept", outside = fixture/L"outside";
+    Write(linkedDirectory/L"payload.tmp", "planned original", old); Write(outside/L"payload.tmp", "protected sentinel", old);
+    auto current = Scan(options); std::vector<bool> choice(current.candidates.size(), false);
+    for (size_t i = 0; i < choice.size(); ++i) choice[i] = current.candidates[i].path == (linkedDirectory/L"payload.tmp").wstring();
+    auto redirected = BuildPlan(current, choice, options, Disposition::PermanentDelete);
+    fs::rename(linkedDirectory, preservedDirectory); Junction(linkedDirectory, outside);
+    expectSkip(redirected, options, PlanReason::UnsafePath);
+    Check(Snapshot(outside).at((outside/L"payload.tmp").wstring()) == "protected sentinel" &&
+        Snapshot(preservedDirectory).at((preservedDirectory/L"payload.tmp").wstring()) == "planned original",
+        "Ancestor redirection never changes the outside sentinel or the retained original");
 }
 int wmain(int argc, wchar_t** argv)
 {
@@ -321,6 +486,7 @@ int wmain(int argc, wchar_t** argv)
             result.coverage[static_cast<size_t>(Cleanup::Category::VSCode)].state == Cleanup::CoverageState::Failed,
             "A roaming ancestor junction never redirects cache recognition or disables independent local results");
         Check(Snapshot(outside).size() == 1, "Outside sentinel remains intact");
+        RunPlanTests(root, now, old);
         std::cout << "{\"status\":\"PASS\",\"checks\":" << checks << "}" << std::endl;
         return 0;
     } catch (const std::exception& error) {

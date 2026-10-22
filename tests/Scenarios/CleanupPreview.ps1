@@ -24,6 +24,79 @@ function Wait-CleanupPreviewIdle {
     } 'The cleanup worker and preview updates settle' -StableMilliseconds 350 | Out-Null
 }
 
+function Test-CleanupReadOnlyPlan {
+    param($App, [IntPtr] $Preview, [string[]] $Expected)
+    $open = Get-DialogControl $Preview 'IDC_CP_PLAN'
+    Assert-True ([TestDesktop]::IsWindowEnabled($open)) 'A complete selected preview can create a plan'
+    [void][TestDesktop]::PostMessage($open, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+    $plan = Wait-Until { Get-AppDialog $App 'IDC_CPLAN_SIMULATE' } 'The independent read-only plan opens'
+    $files = Get-DialogControl $plan 'IDC_CPLAN_FILES'
+    $stop = Get-DialogControl $plan 'IDC_CPLAN_STOP'
+    $wait = {
+        Wait-Until {
+            -not [TestDesktop]::IsWindowEnabled($stop) -and [NativeListViewHelper]::GetItemCount($files) -eq $Expected.Count
+        } 'The plan worker returns its complete immutable snapshot' -StableMilliseconds 350 | Out-Null
+    }
+    & $wait
+    $rect = [TestDesktop]::Rectangle($plan)
+    $work = [System.Windows.Forms.Screen]::FromHandle($plan).WorkingArea
+    Assert-True ($rect[0] -ge $work.Left -and $rect[1] -ge $work.Top -and $rect[2] -le $work.Right -and $rect[3] -le $work.Bottom) `
+        'The read-only plan fits its monitor working area'
+    $lastButton = [TestDesktop]::Rectangle((Get-DialogControl $plan 'IDC_CPLAN_STOP'))
+    $closeButton = [TestDesktop]::Rectangle(([TestDesktop]::GetDlgItem($plan, 2)))
+    Assert-True ($lastButton[2] -lt $closeButton[0]) 'Plan verification and close controls do not overlap'
+    Assert-True (-not [TestDesktop]::IsWindowEnabled($Preview)) 'The source selection cannot change while reviewing its plan'
+    Assert-Sequence @([NativeListViewHelper]::GetItemTexts($files) | Sort-Object) @($Expected | Sort-Object) `
+        'The plan contains exactly the explicitly selected preview files'
+    foreach ($column in 1,2,3,4,5,6,7) {
+        Assert-Equal @([NativeListViewHelper]::GetItemTexts($files, $column) | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count 0 `
+            "Plan column $column explains rule, evidence, risk, disposition, estimate, result or error"
+    }
+    $mode = Get-DialogControl $plan 'IDC_CPLAN_MODE'
+    Assert-Equal ([TestDesktop]::Message($mode, 0x0147).ToInt32()) 0 'A new plan defaults explicitly to the Recycle Bin'
+    Assert-Equal @([NativeListViewHelper]::GetItemTexts($files, 5) | Where-Object { $_ -notmatch '^0' }).Count 0 `
+        'Recycle intent does not claim released allocation'
+    $buttons = @([TestDesktop]::Children($plan) | Where-Object { [TestDesktop]::Class($_) -eq 'Button' } |
+        ForEach-Object { [TestDesktop]::ControlText($_) })
+    Assert-True (-not @($buttons | Where-Object { $_ -match '删除|执行清理|Delete|Clean now' }).Count) `
+        'The plan exposes simulation, stop and close without a deletion button'
+    Invoke-CleanupButton $plan 'IDC_CPLAN_SIMULATE'
+    & $wait
+    Assert-Equal @([NativeListViewHelper]::GetItemTexts($files, 6) | Where-Object { $_ -notmatch 'Simulation passed|模拟复核通过' }).Count 0 `
+        'All unchanged selected files pass read-only metadata simulation'
+    $recycleSummary = [TestDesktop]::ControlText((Get-DialogControl $plan 'IDC_CPLAN_STATUS'))
+    Assert-True ($recycleSummary -match 'Actual released: 0|实际释放0') 'Simulation always reports zero actual release'
+    foreach ($index in 1,2) {
+        [void][TestDesktop]::Message($mode, 0x014E, $index)
+        [void][TestDesktop]::Message($plan, 0x0111, ((1 -shl 16) -bor (Get-ResourceId 'IDC_CPLAN_MODE')), $mode.ToInt64())
+        & $wait
+        Assert-Equal ([TestDesktop]::Message($mode, 0x0147).ToInt32()) $index 'Only an explicit mode selection changes disposition'
+        if ($index -eq 2) {
+            $summary = [TestDesktop]::ControlText((Get-DialogControl $plan 'IDC_CPLAN_STATUS'))
+            Assert-True ($summary -match "Skipped/failed: $($Expected.Count)\b|跳过或失败$($Expected.Count)\D") `
+                'An unsupported plan counts all skipped items before simulation'
+        }
+        Invoke-CleanupButton $plan 'IDC_CPLAN_SIMULATE'
+        & $wait
+        $results = @([NativeListViewHelper]::GetItemTexts($files, 6))
+        if ($index -eq 1) {
+            Assert-Equal @($results | Where-Object { $_ -notmatch 'Simulation passed|模拟复核通过' }).Count 0 `
+                'Explicit permanent intent remains a read-only simulation'
+            Assert-True (@([NativeListViewHelper]::GetItemTexts($files, 5) | Where-Object { $_ -notmatch '^0' }).Count -gt 0) `
+                'Permanent intent reports a nonzero allocation upper bound for nonempty fixtures'
+        } else {
+            Assert-Equal @($results | Where-Object { $_ -notmatch 'Unsupported disposition|不支持此处置方式' }).Count 0 `
+                'Official Windows cleanup is skipped with its unsupported reason'
+            Assert-Equal @([NativeListViewHelper]::GetItemTexts($files, 4) | Where-Object { $_ -notmatch 'Windows' }).Count 0 `
+                'Unsupported official cleanup never switches to file deletion'
+        }
+        Assert-True ([TestDesktop]::ControlText((Get-DialogControl $plan 'IDC_CPLAN_STATUS')) -match 'Actual released: 0|实际释放0') `
+            'Every disposition keeps actual released bytes at zero'
+    }
+    Close-AppDialog $plan
+    Assert-True ([TestDesktop]::IsWindowEnabled($Preview)) 'Closing the plan restores its original preview'
+}
+
 function Set-CleanupExclusions {
     param([IntPtr] $Dialog, [string] $Value)
     $edit = Get-DialogControl $Dialog 'IDC_CP_EXCLUSIONS'
@@ -251,6 +324,7 @@ function Test-CleanupPreview {
     Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 0 'Opening the preview does not start a scan'
     Assert-Equal ([NativeListViewHelper]::GetItemCount($categories)) 10 'Ten audited categories are available'
     Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $dialog 'IDC_CP_CANCEL'))) 'Idle preview has no running worker'
+    Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $dialog 'IDC_CP_PLAN'))) 'An empty preview cannot form a plan'
     $buttons = @([TestDesktop]::Children($dialog) | Where-Object { [TestDesktop]::Class($_) -eq 'Button' } |
         ForEach-Object { [TestDesktop]::ControlText($_) })
     Assert-True (-not @($buttons | Where-Object { $_ -match '删除|执行清理|Delete|Execute|Clean now' }).Count) `
@@ -296,8 +370,12 @@ function Test-CleanupPreview {
             'Explicit bulk selection checks candidates without modifying them'
     }
     $allTotals = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_TOTALS'))
+    Test-CleanupReadOnlyPlan $app $dialog $expected
+    Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_TOTALS'))) $allTotals `
+        'Building and simulating independent plans preserves the original selection and totals'
     Invoke-CleanupButton $dialog 'IDC_CP_SELECT_NONE'
     $noneTotals = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_TOTALS'))
+    Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $dialog 'IDC_CP_PLAN'))) 'Clearing all selection disables plan creation'
     Assert-True ($allTotals -ne $noneTotals) 'Selected counts and allocation estimates update with selection'
 
     # Exercise the native state icon as well as the keyboard and bulk commands.
@@ -436,6 +514,7 @@ function Test-CleanupPreview {
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Wait-CleanupPreviewIdle $dialog
     Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 10000 'The synthetic preview reaches its real candidate cap'
+    Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $dialog 'IDC_CP_PLAN'))) 'A capped incomplete preview cannot create a plan'
     Invoke-CleanupButton $dialog 'IDC_CP_SELECT_ALL'
     $cappedTotals = Get-CleanupTotalsWithoutVisible $dialog
     for ($sort = 0; $sort -lt 2; ++$sort) {
