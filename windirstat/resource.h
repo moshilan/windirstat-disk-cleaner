@@ -437,13 +437,30 @@
 #define IDS_URL_REPORT_BUG              57351
 #define IDS_URL_WEBSITE                 57352
 
+#define IDD_CLEANUP_PREVIEW             124
+#define ID_CLEANUP_PREVIEW              32970
+#define IDC_CP_CATEGORIES               1204
+#define IDC_CP_FILES                    1205
+#define IDC_CP_EXCLUSIONS               1206
+#define IDC_CP_ADD_EXCLUSION            1207
+#define IDC_CP_SCAN                     1208
+#define IDC_CP_CANCEL                   1209
+#define IDC_CP_SELECT_ALL               1210
+#define IDC_CP_SELECT_NONE              1211
+#define IDC_CP_STATUS                   1212
+#define IDC_CP_TOTALS                   1213
+#define IDC_CP_DETAILS                  1214
+#define IDC_CP_NOTICE                   1215
+#define IDC_CP_ISSUES                   1216
+#define IDC_CP_PROGRESS                 1217
+
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        124
-#define _APS_NEXT_COMMAND_VALUE         32970
-#define _APS_NEXT_CONTROL_VALUE         1204
-#define _APS_NEXT_SYMED_VALUE           124
+#define _APS_NEXT_RESOURCE_VALUE        125
+#define _APS_NEXT_COMMAND_VALUE         32971
+#define _APS_NEXT_CONTROL_VALUE         1218
+#define _APS_NEXT_SYMED_VALUE           125
 #endif
 #endif

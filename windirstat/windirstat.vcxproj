@@ -227,6 +227,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClInclude Include="Pages\PageTreeMap.h" />
     <ClInclude Include="Property.h" />
     <ClInclude Include="resource.h" />
+    <ClInclude Include="Cleanup\CleanupPreview.h" />
+    <ClInclude Include="Dialogs\CleanupPreviewDlg.h" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="Views\ExtensionView.h" />
     <ClInclude Include="Views\WinDirStatPane.h" />
@@ -249,6 +251,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClInclude Include="UiFramework.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="Cleanup\CleanupPreview.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Dialogs\CleanupPreviewDlg.cpp" />
     <ClCompile Include="Controls\ExtensionListControl.cpp" />
     <ClCompile Include="Controls\FileDupeControl.cpp" />
     <ClCompile Include="Controls\FileTopControl.cpp" />

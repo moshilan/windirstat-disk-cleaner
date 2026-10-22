@@ -15,8 +15,14 @@
 #include "ExtensionView.h"
 #include "ProgressDlg.h"
 #include "RecoveryDlg.h"
+#include "CleanupPreviewDlg.h"
 
 static const int UdcMenuTag = 0;
+
+void CMainFrame::OnCleanupPreview()
+{
+    CCleanupPreviewDlg(this).ShowModal();
+}
 
 void CMainFrame::OnToolsRecovery()
 {

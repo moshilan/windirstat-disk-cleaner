@@ -315,6 +315,7 @@ protected:
     void OnUpdateWatcherAutoScroll(CCmdUI* pCmdUI);
     void OnWatcherClear();
     void OnUpdateWatcherClear(CCmdUI* pCmdUI);
+    void OnCleanupPreview();
     void OnToolsRecovery();
     void OnUpdateToolsRecovery(CCmdUI* pCmdUI) const;
     void OnToolsPermissions() const;
@@ -464,6 +465,7 @@ inline std::span<const RouteEntry> CMainFrame::Routes()
         Route::Update<&OnUpdateWatcherAutoScroll>(ID_WATCHER_AUTOSCROLL),
         Route::Command<&OnWatcherClear>(ID_WATCHER_CLEAR),
         Route::Update<&OnUpdateWatcherClear>(ID_WATCHER_CLEAR),
+        Route::Command<&OnCleanupPreview>(ID_CLEANUP_PREVIEW),
         Route::Command<&OnToolsRecovery>(ID_TOOLS_RECOVERY),
         Route::Update<&OnUpdateToolsRecovery>(ID_TOOLS_RECOVERY),
         Route::Command<&OnToolsPermissions>(ID_TOOLS_PERMISSIONS),

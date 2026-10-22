@@ -233,6 +233,8 @@
     <ClInclude Include="Pages\PagePrompts.h">
       <Filter>Header Files\User Interface\Pages</Filter>
     </ClInclude>
+    <ClInclude Include="Cleanup\CleanupPreview.h"><Filter>Header Files\Core</Filter></ClInclude>
+    <ClInclude Include="Dialogs\CleanupPreviewDlg.h"><Filter>Header Files\User Interface\Dialogs</Filter></ClInclude>
     <ClInclude Include="resource.h">
       <Filter>Resource Files\Resources</Filter>
     </ClInclude>
@@ -475,6 +477,8 @@
     <ClCompile Include="Controls\FileDupeControl.cpp">
       <Filter>Source Files\User Interface\Controls</Filter>
     </ClCompile>
+    <ClCompile Include="Cleanup\CleanupPreview.cpp"><Filter>Source Files\Core</Filter></ClCompile>
+    <ClCompile Include="Dialogs\CleanupPreviewDlg.cpp"><Filter>Source Files\User Interface\Dialogs</Filter></ClCompile>
     <ClCompile Include="Controls\ExtensionListControl.cpp">
       <Filter>Source Files\User Interface\Controls</Filter>
     </ClCompile>

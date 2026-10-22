@@ -67,16 +67,31 @@ jobs:
       - name: Read-only scan of synthetic data only
         run: ./.github/scripts/Test-SyntheticScan.ps1 -Executable build/WinDirStat_x64.exe -OutputDirectory artifacts/records
 
+      - name: Verify restricted read-only cleanup scanner
+        run: |
+          & $env:MSBUILD_EXE tests/CleanupPreviewTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/cleanup-tests-build.log;verbosity=normal'
+          if ($LASTEXITCODE -ne 0) { throw 'Cleanup test executable build failed.' }
+          $fixture = Join-Path $env:RUNNER_TEMP ('WinDirStatCleanupTests-' + [guid]::NewGuid().ToString('N'))
+          & intermediate/cleanup-tests/CleanupPreviewTests.exe $fixture | Set-Content artifacts/records/cleanup-core.json -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Read-only cleanup scanner regression failed.' }
+
       - name: Verify scan policy and measure synthetic workloads
         run: |
           $reportRoot = Join-Path $env:RUNNER_TEMP 'scan-policy-results'
           # Keep fixtures so the selected tests perform no deletion; the disposable runner owns cleanup.
-          pwsh -NoProfile -STA -File tests/Test-WinDirStat.ps1 -ExePath build/WinDirStat_x64.exe -Scenario scan.policy,scan.workloads,fs.empty,fs.access-denied,fs.access-denied.json,scan.outcome.cancelled -KeepArtifacts -RequireAll -OutputPath $reportRoot
+          pwsh -NoProfile -STA -File tests/Test-WinDirStat.ps1 -ExePath build/WinDirStat_x64.exe -Scenario scan.policy,scan.workloads,fs.empty,fs.access-denied,fs.access-denied.json,scan.outcome.cancelled,cleanup.preview,cleanup.preview.zh -KeepArtifacts -RequireAll -OutputPath $reportRoot
           $testExit = $LASTEXITCODE
           if (Test-Path (Join-Path $reportRoot 'results.json')) {
             $report = Get-Content (Join-Path $reportRoot 'results.json') -Raw | ConvertFrom-Json
             $report.Results | Select-Object Id,Status,Checks,Seconds,Notes |
               ConvertTo-Json -Depth 8 | Set-Content artifacts/records/scan-policy.json -Encoding utf8
+            # Only synthetic runner UI is copied; never upload raw reports or local screenshots.
+            foreach ($case in $report.Results | Where-Object { $_.Id -in @('cleanup.preview', 'cleanup.preview.zh') -and $_.Status -eq 'PASS' }) {
+              $screenshot = Join-Path $case.Artifacts 'cleanup-preview.png'
+              if (Test-Path -LiteralPath $screenshot) {
+                Copy-Item -LiteralPath $screenshot -Destination (Join-Path artifacts/records ($case.Id + '.png'))
+              }
+            }
           }
           if ($testExit -ne 0) { throw "Scan policy regression failed: $testExit" }
 
