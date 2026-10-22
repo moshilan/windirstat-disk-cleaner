@@ -217,6 +217,7 @@ bool CCleanupPreviewDlg::OnInitDialog()
     m_progressBar.SubclassDlgItem(IDC_CP_PROGRESS, this);
     for (auto* list : { &m_categories, &m_files })
         list->SetExtendedStyle(LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
+    ::SendMessageW(m_files.Handle(), LVM_SETCALLBACKMASK, LVIS_STATEIMAGEMASK, 0);
     m_categories.InsertColumn(0, Localization::Lookup(IDS_CP_CATEGORY), LVCFMT_LEFT, 210);
     m_categories.InsertColumn(1, Localization::Lookup(IDS_CP_COUNT), LVCFMT_RIGHT, 70);
     m_categories.InsertColumn(2, Localization::Lookup(IDS_CP_ALLOCATED), LVCFMT_RIGHT, 110);
@@ -439,7 +440,7 @@ void CCleanupPreviewDlg::FillFiles()
     std::uint64_t dataUs = RefreshClock() - started, controlsUs = 0;
     auto phase = RefreshClock();
     m_files.SetRedraw(false);
-    ::SendMessageW(m_files.Handle(), LVM_DELETEALLITEMS, 0, 0);
+    m_files.SetItemState(-1, 0, LVIS_SELECTED | LVIS_FOCUSED);
     controlsUs += RefreshClock() - phase;
     phase = RefreshClock();
     m_visible.clear();
@@ -453,28 +454,17 @@ void CCleanupPreviewDlg::FillFiles()
         return m_descending ? left > right : left < right;
     });
     const auto sortUs = RefreshClock() - phase;
-    for (size_t i = 0; i < m_visible.size(); ++i)
-    {
-        const auto index = m_visible[i];
-        const auto& candidate = m_result.candidates[index];
-        const int row = static_cast<int>(i);
-        phase = RefreshClock();
-        const std::array cells{ CategoryName(candidate.category), FormatBytes(candidate.allocatedBytes),
-            candidate.ruleId + L" / v" + std::to_wstring(candidate.ruleVersion),
-            Localization::Lookup(candidate.reasonKey), RiskName(candidate.risk, candidate.assessment) };
-        dataUs += RefreshClock() - phase;
-        phase = RefreshClock();
-        Row(m_files, row, candidate.path);
-        Check(m_files, row, m_selected[index]);
-        for (int column = 1; column <= static_cast<int>(cells.size()); ++column)
-            Cell(m_files, row, column, cells[column - 1]);
-        if (index == focus) m_files.SetItemState(row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-        controlsUs += RefreshClock() - phase;
-    }
     phase = RefreshClock();
-    if (std::ranges::find(m_visible, focus) == m_visible.end()) SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_SELECT_HINT));
+    // The control keeps only row count and focus. Text and check states come from
+    // the existing candidate identity mapping, including rows restored by a filter.
+    m_files.SetItemCountEx(static_cast<int>(m_visible.size()), LVSICF_NOINVALIDATEALL | LVSICF_NOSCROLL);
+    if (const auto position = std::ranges::find(m_visible, focus); position != m_visible.end())
+        m_files.SetItemState(static_cast<int>(position - m_visible.begin()), LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    else SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_SELECT_HINT));
     m_files.SetRedraw(true);
     m_files.Invalidate();
+    controlsUs += RefreshClock() - phase;
+    phase = RefreshClock();
     m_internalChange = false;
     SetText(IDC_CP_SORT_SIZE, Localization::Lookup(m_sortSize && m_descending ? IDS_CP_SORT_ASC : IDS_CP_SORT_DESC));
     UpdateSummary();
@@ -522,7 +512,7 @@ void CCleanupPreviewDlg::InvalidatePreview()
 {
     if (m_scanning || m_internalChange) return;
     m_internalChange = true;
-    ::SendMessageW(m_files.Handle(), LVM_DELETEALLITEMS, 0, 0);
+    m_files.SetItemCountEx(0);
     m_result = {};
     m_visible.clear();
     m_selected.clear();
@@ -696,7 +686,8 @@ void CCleanupPreviewDlg::OnSelectAll()
 {
     if (m_scanning || !m_valid) return;
     m_internalChange = true;
-    for (int i = 0; i < m_files.GetItemCount(); ++i) { m_selected[m_visible[i]] = true; Check(m_files, i, true); }
+    for (const auto index : m_visible) m_selected[index] = true;
+    m_files.Invalidate();
     m_internalChange = false;
     UpdateSummary();
 }
@@ -705,7 +696,7 @@ void CCleanupPreviewDlg::OnSelectNone()
     if (m_scanning || !m_valid) return;
     m_internalChange = true;
     std::fill(m_selected.begin(), m_selected.end(), false);
-    for (int i = 0; i < m_files.GetItemCount(); ++i) Check(m_files, i, false);
+    m_files.Invalidate();
     m_internalChange = false;
     UpdateSummary();
 }
@@ -726,9 +717,57 @@ void CCleanupPreviewDlg::OnFileChanged(NMHDR* header, LRESULT* result)
     if ((change->uOldState ^ change->uNewState) & LVIS_STATEIMAGEMASK)
     {
         if (change->iItem >= 0 && static_cast<size_t>(change->iItem) < m_visible.size())
-            m_selected[m_visible[change->iItem]] = IsRowChecked(m_files, change->iItem);
+            m_selected[m_visible[change->iItem]] = (change->uNewState & LVIS_STATEIMAGEMASK) == INDEXTOSTATEIMAGEMASK(2);
         UpdateSummary();
     }
+}
+void CCleanupPreviewDlg::OnFileRangeChanged(NMHDR*, LRESULT* result)
+{
+    NMLISTVIEW change{};
+    OnFileChanged(&change.hdr, result);
+}
+void CCleanupPreviewDlg::ToggleFile(const int row)
+{
+    if (m_scanning || !m_valid || row < 0 || static_cast<size_t>(row) >= m_visible.size()) return;
+    const auto index = m_visible[row];
+    m_selected[index] = !m_selected[index];
+    m_files.RedrawItems(row, row);
+    UpdateSummary();
+}
+void CCleanupPreviewDlg::OnFileClick(NMHDR* header, LRESULT* result)
+{
+    *result = 0;
+    UINT flags = 0;
+    const int row = m_files.HitTest(reinterpret_cast<NMLISTVIEW*>(header)->ptAction, &flags);
+    if (flags & LVHT_ONITEMSTATEICON) ToggleFile(row);
+}
+void CCleanupPreviewDlg::OnFileKeyDown(NMHDR* header, LRESULT* result)
+{
+    *result = 0;
+    if (reinterpret_cast<NMLVKEYDOWN*>(header)->wVKey == VK_SPACE)
+        ToggleFile(m_files.GetNextItem(-1, LVNI_FOCUSED));
+}
+void CCleanupPreviewDlg::OnFileDisplayInfo(NMHDR* header, LRESULT* result)
+{
+    *result = 0;
+    auto& item = reinterpret_cast<NMLVDISPINFO*>(header)->item;
+    if (item.iItem < 0 || static_cast<size_t>(item.iItem) >= m_visible.size()) return;
+    const auto index = m_visible[item.iItem];
+    if (item.mask & LVIF_STATE)
+        item.state = (item.state & ~LVIS_STATEIMAGEMASK) | INDEXTOSTATEIMAGEMASK(m_selected[index] ? 2 : 1);
+    if (!(item.mask & LVIF_TEXT)) return;
+    const auto& candidate = m_result.candidates[index];
+    switch (item.iSubItem)
+    {
+    case 0: m_fileCell = candidate.path; break;
+    case 1: m_fileCell = CategoryName(candidate.category); break;
+    case 2: m_fileCell = FormatBytes(candidate.allocatedBytes); break;
+    case 3: m_fileCell = candidate.ruleId + L" / v" + std::to_wstring(candidate.ruleVersion); break;
+    case 4: m_fileCell = Localization::Lookup(candidate.reasonKey); break;
+    case 5: m_fileCell = RiskName(candidate.risk, candidate.assessment); break;
+    default: m_fileCell.clear(); break;
+    }
+    item.pszText = m_fileCell.data();
 }
 void CCleanupPreviewDlg::OnAddExclusion()
 {

@@ -24,6 +24,9 @@ public sealed class TestWindow
 
 public static class TestDesktop
 {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "GetPropW")]
+    public static extern IntPtr GetWindowProperty(IntPtr window, string name);
+
     [StructLayout(LayoutKind.Sequential)]
     private struct RECT
     {

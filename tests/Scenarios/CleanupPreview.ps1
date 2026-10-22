@@ -94,7 +94,7 @@ function Move-CleanupDivider {
 }
 
 function Click-CleanupFilter {
-    param([IntPtr] $Dialog, [bool] $Expected, [switch] $Label)
+    param([IntPtr] $Dialog, [bool] $Expected, [switch] $Label, [switch] $Measure)
     $button = Get-DialogControl $Dialog 'IDC_CP_HIDE_ZERO'
     $rect = [TestDesktop]::Rectangle($button)
     [TestDesktop]::Activate($Dialog)
@@ -102,11 +102,21 @@ function Click-CleanupFilter {
     $y = [int](($rect[1] + $rect[3]) / 2)
     [TestDesktop]::MoveCursor($x, $y)
     Assert-Equal ([TestDesktop]::WindowAt($x, $y)) $button 'The native filter pointer reaches the checkbox or its label'
+    $watch = [Diagnostics.Stopwatch]::StartNew()
     [TestDesktop]::LeftButton($true)
     Start-Sleep -Milliseconds 80
     [TestDesktop]::LeftButton($false)
     Wait-Until { [TestDesktop]::Message($button, 0x00F0).ToInt32() -eq [int]$Expected } `
         'A native filter click reaches the requested checked state' -StableMilliseconds 150 | Out-Null
+    if ($Measure) {
+        $elapsed = $watch.ElapsedMilliseconds
+        $timings = [ordered]@{ Hidden = $Expected; InteractionMs = $elapsed }
+        foreach ($phase in @('DataUs', 'FilterUs', 'SortUs', 'ControlsUs', 'SummaryUs', 'TotalUs', 'PaintUs')) {
+            $timings[$phase] = [TestDesktop]::GetWindowProperty($Dialog, ('WDS.Cleanup.Refresh.' + $phase)).ToInt64()
+        }
+        Write-TestNote ('Cleanup refresh: ' + ($timings | ConvertTo-Json -Compress))
+        Assert-True ($elapsed -lt 3000) 'A capped native filter interaction settles within the unchanged three-second limit'
+    }
 }
 
 function Resize-CleanupByPointer {
@@ -290,6 +300,22 @@ function Test-CleanupPreview {
     $noneTotals = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_TOTALS'))
     Assert-True ($allTotals -ne $noneTotals) 'Selected counts and allocation estimates update with selection'
 
+    # Exercise the native state icon as well as the keyboard and bulk commands.
+    $fileRect = [TestDesktop]::Rectangle($files)
+    $headerRect = [TestDesktop]::Rectangle([TestDesktop]::Message($files, 0x101F))
+    [TestDesktop]::Activate($dialog)
+    [TestDesktop]::MoveCursor($fileRect[0] + 10, $headerRect[3] + 8)
+    Assert-Equal ([TestDesktop]::WindowAt($fileRect[0] + 10, $headerRect[3] + 8)) $files 'The native candidate checkbox pointer reaches the list'
+    foreach ($expectedState in @(0x2000, 0x1000)) {
+        [TestDesktop]::LeftButton($true)
+        Start-Sleep -Milliseconds 80
+        [TestDesktop]::LeftButton($false)
+        Wait-Until { ([TestDesktop]::Message($files, 0x102C, 0, 0xF000).ToInt32() -band 0xF000) -eq $expectedState } `
+            'A native candidate checkbox click toggles its identity state' -StableMilliseconds 150 | Out-Null
+    }
+    Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_TOTALS'))) $noneTotals `
+        'Two native checkbox clicks restore selected counts and space'
+
     # One checked identity must survive numeric sorting rather than following its old row index.
     $largestRow = [array]::IndexOf([NativeListViewHelper]::GetItemTexts($files), $largest)
     Assert-True ([NativeListViewHelper]::FocusListView($files) -and [NativeListViewHelper]::SelectSingleItem($files, $largestRow)) `
@@ -400,7 +426,7 @@ function Test-CleanupPreview {
     Assert-Sequence (Get-CleanupAccessRules $restored) (Get-CleanupAccessRules $acl) `
         'Every access rule is restored, including rights, inheritance and deny state'
 
-    # Exercise the actual preview cap, including label clicks after a full list rebuild.
+    # Exercise the actual preview cap with native clicks and the shipping timeout.
     for ($index = 0; $index -lt 10000; ++$index) {
         New-CleanupFixtureFile (Join-Path $local "Temp\stress\file-$index.tmp") 0 | Out-Null
     }
@@ -409,12 +435,23 @@ function Test-CleanupPreview {
     Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 10000 'The synthetic preview reaches its real candidate cap'
     Invoke-CleanupButton $dialog 'IDC_CP_SELECT_ALL'
     $cappedTotals = Get-CleanupTotalsWithoutVisible $dialog
+    for ($sort = 0; $sort -lt 2; ++$sort) {
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        Invoke-CleanupButton $dialog 'IDC_CP_SORT_SIZE'
+        $elapsed = $watch.ElapsedMilliseconds
+        Write-TestNote "Capped cleanup sort: ${elapsed}ms"
+        Assert-True ($elapsed -lt 3000) 'Capped sorting completes within the unchanged three-second limit'
+        Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 10000 'Capped sorting retains every candidate'
+        Assert-Equal (Get-CleanupTotalsWithoutVisible $dialog) $cappedTotals 'Capped sorting retains checked identities and statistics'
+    }
     for ($toggle = 0; $toggle -lt 2; ++$toggle) {
-        Click-CleanupFilter $dialog $true -Label
+        Click-CleanupFilter $dialog $true -Label -Measure
         Assert-True ([NativeListViewHelper]::GetItemCount($files) -lt 10000) 'A label click hides empty files at the candidate cap'
-        Click-CleanupFilter $dialog $false -Label
+        Click-CleanupFilter $dialog $false -Label -Measure
         Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 10000 'A second label click restores all capped candidates'
         Assert-Equal (Get-CleanupTotalsWithoutVisible $dialog) $cappedTotals 'Capped list toggles preserve candidate totals and original checks'
+        Assert-Equal ([TestDesktop]::Message($files, 0x102C, 9999, 0xF000).ToInt32() -band 0xF000) 0x2000 `
+            'The final restored candidate keeps its original check state without rebuilding rows'
     }
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Invoke-CleanupButton $dialog 'IDC_CP_CANCEL'

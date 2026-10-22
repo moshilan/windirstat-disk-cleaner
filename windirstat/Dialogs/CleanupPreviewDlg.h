@@ -25,6 +25,11 @@ private:
     void OnConfigurationChanged();
     void OnCategoryChanged(NMHDR*, LRESULT*);
     void OnFileChanged(NMHDR*, LRESULT*);
+    void OnFileDisplayInfo(NMHDR*, LRESULT*);
+    void OnFileRangeChanged(NMHDR*, LRESULT*);
+    void OnFileClick(NMHDR*, LRESULT*);
+    void OnFileKeyDown(NMHDR*, LRESULT*);
+    void ToggleFile(int row);
     void OnColumnClick(NMHDR*, LRESULT*);
     void OnSortSize();
     void OnFilter();
@@ -79,6 +84,7 @@ private:
     bool m_optionsValid = true;
     bool m_exclusionsCorrupt = false;
     std::wstring m_savedExclusionsText;
+    std::wstring m_fileCell;
     ULONGLONG m_started = 0;
 };
 
@@ -94,6 +100,11 @@ inline std::span<const RouteEntry> CCleanupPreviewDlg::Routes()
         Route::Control<&OnConfigurationChanged>(EN_CHANGE, IDC_CP_EXCLUSIONS),
         Route::Notify<&OnCategoryChanged>(LVN_ITEMCHANGED, IDC_CP_CATEGORIES),
         Route::Notify<&OnFileChanged>(LVN_ITEMCHANGED, IDC_CP_FILES),
+        Route::Notify<&OnFileDisplayInfo>(LVN_GETDISPINFO, IDC_CP_FILES),
+        Route::Notify<&OnFileRangeChanged>(LVN_ODSTATECHANGED, IDC_CP_FILES),
+        Route::Notify<&OnFileClick>(NM_CLICK, IDC_CP_FILES),
+        Route::Notify<&OnFileClick>(NM_DBLCLK, IDC_CP_FILES),
+        Route::Notify<&OnFileKeyDown>(LVN_KEYDOWN, IDC_CP_FILES),
         Route::Notify<&OnColumnClick>(LVN_COLUMNCLICK, IDC_CP_FILES),
         Route::Control<&OnSortSize>(BN_CLICKED, IDC_CP_SORT_SIZE),
         Route::Control<&OnFilter>(BN_CLICKED, IDC_CP_HIDE_ZERO),
