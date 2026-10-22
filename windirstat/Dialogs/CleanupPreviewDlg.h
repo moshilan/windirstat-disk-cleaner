@@ -45,6 +45,9 @@ private:
     void FillResult();
     void InvalidatePreview();
     bool ResolveOptions();
+    void LoadExclusions();
+    bool SaveExclusions();
+    std::wstring RuleDetails(const Cleanup::Rule& rule) const;
     static std::wstring CategoryName(Cleanup::Category category);
     CListCtrl m_categories;
     CListCtrl m_files;
@@ -74,6 +77,8 @@ private:
     bool m_fixture = false;
     bool m_valid = false;
     bool m_optionsValid = true;
+    bool m_exclusionsCorrupt = false;
+    std::wstring m_savedExclusionsText;
     ULONGLONG m_started = 0;
 };
 

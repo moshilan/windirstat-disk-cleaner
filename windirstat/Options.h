@@ -377,6 +377,7 @@ public:
     inline static Setting<std::wstring> SearchSizeMaximum{ OptionsSearch, L"SearchSizeMaximum" };
     inline static Setting<std::wstring> SearchPhysicalMinimum{ OptionsSearch, L"SearchPhysicalMinimum" };
     inline static Setting<std::wstring> SearchPhysicalMaximum{ OptionsSearch, L"SearchPhysicalMaximum" };
+    inline static Setting<std::wstring> CleanupPreviewExclusions{ L"CleanupPreview", L"ExcludedDirectoriesUtf16Hex" };
     inline static Setting<std::wstring> FilteringExcludeDirs{ OptionsDriveSelect,
         L"FilteringExcludeDirs", {}, TextBind(IDC_FILTERING_EXCLUDE_DIRS) };
     inline static Setting<std::wstring> FilteringExcludeFiles{ OptionsDriveSelect,

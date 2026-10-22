@@ -76,14 +76,30 @@ namespace Cleanup
         }
     }
 
-    const std::array<Rule, CategoryCount>& Rules()
+    const std::array<Rule, RuleCount>& Rules()
     {
-        static const std::array<Rule, CategoryCount> rules{{
+        static const std::array<Rule, RuleCount> rules{{
             { L"user-temp-v1", 1, Category::Temporary, L"Temp", 7, Risk::Medium, L"IDS_CP_REASON_TEMP" },
-            { L"chrome-http-v1", 1, Category::Chrome, L"Google\\Chrome\\User Data", 7, Risk::Medium, L"IDS_CP_REASON_BROWSER" },
-            { L"edge-http-v1", 1, Category::Edge, L"Microsoft\\Edge\\User Data", 7, Risk::Medium, L"IDS_CP_REASON_BROWSER" },
-            { L"firefox-http-v1", 1, Category::Firefox, L"Mozilla\\Firefox\\Profiles", 7, Risk::Medium, L"IDS_CP_REASON_BROWSER" },
-            { L"pip-http-v2", 1, Category::Pip, L"pip\\Cache\\http-v2", 7, Risk::Medium, L"IDS_CP_REASON_PIP" }
+            { L"chrome-http-v1", 1, Category::Chrome, L"Google\\Chrome\\User Data", 7, Risk::Medium, L"IDS_CP_REASON_BROWSER",
+                Anchor::LocalAppData, Layout::ChromiumProfiles, Assessment::RegenerableCache },
+            { L"edge-http-v1", 1, Category::Edge, L"Microsoft\\Edge\\User Data", 7, Risk::Medium, L"IDS_CP_REASON_BROWSER",
+                Anchor::LocalAppData, Layout::ChromiumProfiles, Assessment::RegenerableCache },
+            { L"firefox-http-v1", 1, Category::Firefox, L"Mozilla\\Firefox\\Profiles", 7, Risk::Medium, L"IDS_CP_REASON_BROWSER",
+                Anchor::LocalAppData, Layout::FirefoxProfiles, Assessment::RegenerableCache },
+            { L"pip-http-v2", 1, Category::Pip, L"pip\\Cache\\http-v2", 7, Risk::Medium, L"IDS_CP_REASON_PIP",
+                Anchor::LocalAppData, Layout::Tree, Assessment::RegenerableCache },
+            { L"brave-http-v1", 1, Category::Brave, L"BraveSoftware\\Brave-Browser\\User Data", 7, Risk::Medium, L"IDS_CP_REASON_BROWSER",
+                Anchor::LocalAppData, Layout::ChromiumProfiles, Assessment::RegenerableCache },
+            { L"vivaldi-http-v1", 1, Category::Vivaldi, L"Vivaldi\\User Data", 7, Risk::Medium, L"IDS_CP_REASON_BROWSER",
+                Anchor::LocalAppData, Layout::ChromiumProfiles, Assessment::RegenerableCache },
+            { L"vscode-compiled-v1", 1, Category::VSCode, L"Code\\CachedData", 90, Risk::Medium, L"IDS_CP_REASON_VSCODE",
+                Anchor::RoamingAppData, Layout::CommitDirectories, Assessment::ManualReview },
+            { L"npm-download-v1", 1, Category::Npm, L"npm-cache\\_cacache", 7, Risk::Medium, L"IDS_CP_REASON_NPM",
+                Anchor::LocalAppData, Layout::Tree, Assessment::RegenerableCache },
+            { L"nuget-http-v1", 1, Category::NuGet, L"NuGet\\v3-cache", 7, Risk::Medium, L"IDS_CP_REASON_NUGET",
+                Anchor::LocalAppData, Layout::Tree, Assessment::RegenerableCache },
+            { L"pip-http-legacy-v1", 1, Category::Pip, L"pip\\Cache\\http", 7, Risk::Medium, L"IDS_CP_REASON_PIP_LEGACY",
+                Anchor::LocalAppData, Layout::Tree, Assessment::RegenerableCache }
         }};
         return rules;
     }
@@ -94,7 +110,8 @@ namespace Cleanup
         std::wstring path = input;
         std::replace(path.begin(), path.end(), L'/', L'\\');
         if (path.size() < 4 || !iswalpha(path[0]) || path[1] != L':' || path[2] != L'\\' ||
-            path.find_first_of(L"*?\r\n\"<>|") != std::wstring::npos || path.find(L':', 2) != std::wstring::npos)
+            path.find_first_of(L"*?\r\n\"<>|") != std::wstring::npos || path.find(L':', 2) != std::wstring::npos ||
+            std::ranges::any_of(path, [](wchar_t ch) { return ch < 32; }))
         {
             error = L"Use an absolute local directory, not a drive root, wildcard, stream, or network path.";
             return false;
@@ -135,6 +152,76 @@ namespace Cleanup
         }
         normalized = std::move(value);
         return true;
+    }
+
+    bool ParseExclusions(const std::wstring& text, std::vector<std::wstring>& directories, std::wstring& error)
+    {
+        directories.clear();
+        std::vector<std::wstring> parsed;
+        for (size_t start = 0; start < text.size();)
+        {
+            const size_t end = text.find(L'\n', start);
+            std::wstring line = text.substr(start, end == std::wstring::npos ? end : end - start);
+            if (!line.empty() && line.back() == L'\r') line.pop_back();
+            if (!line.empty())
+            {
+                std::wstring normalized;
+                if (!NormalizeDirectory(line, normalized, error)) return false;
+                if (std::ranges::none_of(parsed, [&](const auto& item) { return Equal(item, normalized); }))
+                    parsed.push_back(std::move(normalized));
+            }
+            if (end == std::wstring::npos) break;
+            start = end + 1;
+        }
+        directories = std::move(parsed);
+        return true;
+    }
+
+    std::wstring EncodeExclusions(const std::vector<std::wstring>& directories)
+    {
+        static constexpr wchar_t digits[] = L"0123456789ABCDEF";
+        std::wstring encoded = L"v1:";
+        for (const auto& directory : directories)
+        {
+            if (encoded.size() != 3) encoded += L',';
+            for (const wchar_t ch : directory)
+                for (int shift = 12; shift >= 0; shift -= 4) encoded += digits[(static_cast<unsigned>(ch) >> shift) & 15];
+        }
+        return encoded;
+    }
+
+    bool DecodeExclusions(const std::wstring& encoded, std::vector<std::wstring>& directories, std::wstring& error)
+    {
+        directories.clear();
+        if (encoded.empty() || encoded == L"v1:") return true;
+        if (!encoded.starts_with(L"v1:")) { error = L"Unknown exclusion setting format."; return false; }
+        std::wstring text;
+        for (size_t start = 3; start < encoded.size();)
+        {
+            const size_t end = encoded.find(L',', start);
+            const size_t count = (end == std::wstring::npos ? encoded.size() : end) - start;
+            if (count == 0 || count % 4 != 0 || end == encoded.size() - 1)
+            { error = L"Invalid exclusion setting length."; return false; }
+            std::wstring directory;
+            for (size_t offset = start; offset < start + count; offset += 4)
+            {
+                unsigned value = 0;
+                for (size_t digit = offset; digit < offset + 4; ++digit)
+                {
+                    const wchar_t ch = encoded[digit];
+                    const int hex = ch >= L'0' && ch <= L'9' ? ch - L'0' :
+                        ch >= L'A' && ch <= L'F' ? ch - L'A' + 10 : ch >= L'a' && ch <= L'f' ? ch - L'a' + 10 : -1;
+                    if (hex < 0) { error = L"Invalid exclusion setting digit."; return false; }
+                    value = (value << 4) | static_cast<unsigned>(hex);
+                }
+                if (value < 32) { error = L"Invalid exclusion setting character."; return false; }
+                directory += static_cast<wchar_t>(value);
+            }
+            text += directory + L"\n";
+            if (end == std::wstring::npos) break;
+            start = end + 1;
+        }
+        return ParseExclusions(text, directories, error);
     }
 
     bool IsWithin(const std::wstring& path, const std::wstring& directory)
@@ -197,7 +284,13 @@ namespace Cleanup
         CategoryCoverage* coverage = nullptr;
         std::array<bool, CategoryCount> scannedRoots{};
         std::array<bool, CategoryCount> interrupted{};
-        std::wstring anchor, error;
+        struct AnchorState
+        {
+            std::wstring path, issue;
+            bool checked = false, valid = false, resourceKey = true;
+        };
+        std::array<AnchorState, 2> anchors;
+        std::wstring error;
         const auto warn = [&](const std::wstring& path, const std::wstring& reason, bool resourceKey = false)
         {
             result.incomplete = true;
@@ -210,15 +303,6 @@ namespace Cleanup
             }
             if (result.warnings.size() < 100) result.warnings.push_back({ path, reason, resourceKey });
         };
-        if (!NormalizeDirectory(options.localAppData, anchor, error) || !HasSafeAncestors(anchor))
-        { warn(options.localAppData, L"IDS_CP_WARN_ANCHOR", true); return result; }
-        // Legacy file IDs are reliable for this phase's local NTFS-only scope.
-        wchar_t volume[32768]{}, filesystem[32]{};
-        if (!GetVolumePathNameW(anchor.c_str(), volume, static_cast<DWORD>(std::size(volume))) ||
-            !GetVolumeInformationW(volume, nullptr, 0, nullptr, nullptr, nullptr, filesystem, static_cast<DWORD>(std::size(filesystem))))
-        { warn(anchor, SystemError(GetLastError())); return result; }
-        if (GetDriveTypeW(volume) != DRIVE_FIXED || !Equal(filesystem, L"NTFS"))
-        { warn(anchor, L"IDS_CP_WARN_FILESYSTEM", true); return result; }
         std::vector<std::wstring> excluded, protectedPaths;
         for (const auto& input : options.excludedDirectories)
         {
@@ -237,13 +321,6 @@ namespace Cleanup
             return std::ranges::any_of(excluded, [&](const auto& item) { return IsWithin(path, item); }) ||
                 std::ranges::any_of(protectedPaths, [&](const auto& item) { return IsWithin(path, item); });
         };
-        if (blocked(anchor))
-        {
-            ++result.skipped[static_cast<size_t>(SkipReason::Excluded)];
-            for (size_t i = 0; i < CategoryCount; ++i) if (options.enabled[i])
-            { result.coverage[i].state = CoverageState::Skipped; ++result.coverage[i].skipped; }
-            return result;
-        }
         FILETIME current{};
         GetSystemTimeAsFileTime(&current);
         const auto now = options.now == 0 ? Ticks(current) : options.now;
@@ -257,11 +334,36 @@ namespace Cleanup
         for (const auto& rule : Rules())
         {
             const auto index = static_cast<size_t>(rule.category);
-            if (!options.enabled[index] || cancelled() || result.limitReached) continue;
+            if (!options.enabled[index]) continue;
+            if (cancelled() || result.limitReached)
+            {
+                if (result.coverage[index].state != CoverageState::NotScanned) interrupted[index] = true;
+                continue;
+            }
             coverage = &result.coverage[index];
-            coverage->state = CoverageState::Missing;
+            if (coverage->state == CoverageState::NotScanned) coverage->state = CoverageState::Missing;
+            auto& anchor = anchors[static_cast<size_t>(rule.anchor)];
+            const auto& requested = rule.anchor == Anchor::LocalAppData ? options.localAppData : options.roamingAppData;
+            if (!anchor.checked)
+            {
+                anchor.checked = true;
+                if (!NormalizeDirectory(requested, anchor.path, error) || !HasSafeAncestors(anchor.path))
+                    anchor.issue = L"IDS_CP_WARN_ANCHOR";
+                else
+                {
+                    wchar_t volume[32768]{}, filesystem[32]{};
+                    if (!GetVolumePathNameW(anchor.path.c_str(), volume, static_cast<DWORD>(std::size(volume))) ||
+                        !GetVolumeInformationW(volume, nullptr, 0, nullptr, nullptr, nullptr, filesystem, static_cast<DWORD>(std::size(filesystem))))
+                    { anchor.issue = SystemError(GetLastError()); anchor.resourceKey = false; }
+                    else if (GetDriveTypeW(volume) != DRIVE_FIXED || !Equal(filesystem, L"NTFS"))
+                        anchor.issue = L"IDS_CP_WARN_FILESYSTEM";
+                    else anchor.valid = true;
+                }
+            }
+            if (!anchor.valid) { warn(requested, anchor.issue, anchor.resourceKey); continue; }
+            if (blocked(anchor.path)) { skipped(SkipReason::Excluded); continue; }
             std::vector<std::wstring> roots;
-            const std::wstring base = anchor + L"\\" + rule.relativeRoot;
+            const std::wstring base = anchor.path + L"\\" + rule.relativeRoot;
             if (blocked(base)) { skipped(SkipReason::Excluded); continue; }
             const DWORD baseAttributes = GetFileAttributesW(Extended(base).c_str());
             if (baseAttributes == INVALID_FILE_ATTRIBUTES)
@@ -273,7 +375,7 @@ namespace Cleanup
             }
             if (!HasSafeAncestors(base) || !(baseAttributes & FILE_ATTRIBUTE_DIRECTORY))
             { skipped(SkipReason::Unsafe); continue; }
-            if (rule.category == Category::Chrome || rule.category == Category::Edge || rule.category == Category::Firefox)
+            if (rule.layout != Layout::Tree)
             {
                 WIN32_FIND_DATAW entry{};
                 const HANDLE search = FindFirstFileExW(Extended(base + L"\\*").c_str(), FindExInfoBasic,
@@ -290,11 +392,15 @@ namespace Cleanup
                 {
                     const std::wstring name = entry.cFileName;
                     if (name != L"." && name != L".." && (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-                        (rule.category == Category::Firefox || DefaultProfile(name)))
+                        (rule.layout == Layout::FirefoxProfiles ||
+                            (rule.layout == Layout::ChromiumProfiles && DefaultProfile(name)) ||
+                            (rule.layout == Layout::CommitDirectories && name.size() == 40 &&
+                                std::ranges::all_of(name, [](wchar_t ch) { return (ch >= L'0' && ch <= L'9') ||
+                                    (ch >= L'a' && ch <= L'f') || (ch >= L'A' && ch <= L'F'); }))))
                     {
                         if (entry.dwFileAttributes & UnsafeAttributes) skipped(SkipReason::Unsafe);
-                        else roots.push_back(base + L"\\" + name + (rule.category == Category::Firefox ?
-                            L"\\cache2\\entries" : L"\\Cache\\Cache_Data"));
+                        else roots.push_back(base + L"\\" + name + (rule.layout == Layout::FirefoxProfiles ?
+                            L"\\cache2\\entries" : rule.layout == Layout::ChromiumProfiles ? L"\\Cache\\Cache_Data" : L""));
                     }
                     if (cancelled()) break;
                     more = FindNextFileW(search, &entry) != false;
@@ -436,7 +542,7 @@ namespace Cleanup
                                                     {
                                                         Candidate candidate{ path, rule.id, rule.version, rule.category, rule.risk, rule.reasonKey,
                                                             static_cast<std::uint64_t>(standard.EndOfFile.QuadPart), static_cast<std::uint64_t>(standard.AllocationSize.QuadPart),
-                                                            identity.dwVolumeSerialNumber, {}, static_cast<std::uint64_t>(basic.LastWriteTime.QuadPart), static_cast<std::uint64_t>(basic.CreationTime.QuadPart) };
+                                                            identity.dwVolumeSerialNumber, {}, static_cast<std::uint64_t>(basic.LastWriteTime.QuadPart), static_cast<std::uint64_t>(basic.CreationTime.QuadPart), rule.assessment };
                                                         std::memcpy(candidate.fileId.data(), &fileIndex, sizeof(fileIndex));
                                                         result.categories[index].files++;
                                                         result.categories[index].allocatedBytes += candidate.allocatedBytes;
@@ -461,7 +567,7 @@ namespace Cleanup
                     if (!more && code != ERROR_NO_MORE_FILES) warn(directory, SystemError(code));
                 }
             }
-            interrupted[index] = result.cancelled || result.limitReached;
+            interrupted[index] |= result.cancelled || result.limitReached;
         }
         for (size_t i = 0; i < CategoryCount; ++i)
         {

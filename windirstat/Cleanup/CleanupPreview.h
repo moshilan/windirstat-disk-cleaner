@@ -13,9 +13,13 @@
 
 namespace Cleanup
 {
-    enum class Category : std::uint8_t { Temporary, Chrome, Edge, Firefox, Pip, Count };
+    enum class Category : std::uint8_t { Temporary, Chrome, Edge, Firefox, Pip, Brave, Vivaldi, VSCode, Npm, NuGet, Count };
     inline constexpr size_t CategoryCount = static_cast<size_t>(Category::Count);
+    inline constexpr size_t RuleCount = CategoryCount + 1;
     enum class Risk : std::uint8_t { Low, Medium, High };
+    enum class Anchor : std::uint8_t { LocalAppData, RoamingAppData };
+    enum class Layout : std::uint8_t { Tree, ChromiumProfiles, FirefoxProfiles, CommitDirectories };
+    enum class Assessment : std::uint8_t { ManualReview, RegenerableCache };
     enum class SkipReason : std::uint8_t { Recent, Pattern, Excluded, Unsafe, Hardlink, Streams, Metadata, Duplicate, Count };
     inline constexpr size_t SkipReasonCount = static_cast<size_t>(SkipReason::Count);
 
@@ -30,6 +34,9 @@ namespace Cleanup
         unsigned minimumAgeDays = 7;
         Risk risk = Risk::Medium;
         std::wstring reasonKey;
+        Anchor anchor = Anchor::LocalAppData;
+        Layout layout = Layout::Tree;
+        Assessment assessment = Assessment::ManualReview;
     };
     struct Candidate
     {
@@ -45,6 +52,7 @@ namespace Cleanup
         std::array<std::uint8_t, 16> fileId{};
         std::uint64_t lastWriteTime = 0;
         std::uint64_t creationTime = 0;
+        Assessment assessment = Assessment::ManualReview;
     };
     struct Summary { std::uint64_t files = 0; std::uint64_t allocatedBytes = 0; };
     enum class CoverageState : std::uint8_t { NotScanned, Disabled, Missing, NoMatches, Matches, Skipped, Failed, Partial };
@@ -61,9 +69,10 @@ namespace Cleanup
     struct ScanOptions
     {
         std::wstring localAppData;
+        std::wstring roamingAppData;
         std::vector<std::wstring> protectedDirectories;
         std::vector<std::wstring> excludedDirectories;
-        std::array<bool, CategoryCount> enabled{ true, true, true, true, true };
+        std::array<bool, CategoryCount> enabled = [] { std::array<bool, CategoryCount> value{}; value.fill(true); return value; }();
         size_t maximumCandidates = 50000;
         // Zero uses the current system time. Tests may supply an explicit FILETIME timestamp.
         std::uint64_t now = 0;
@@ -88,8 +97,12 @@ namespace Cleanup
         bool incomplete = false;
         bool limitReached = false;
     };
-    const std::array<Rule, CategoryCount>& Rules();
+    const std::array<Rule, RuleCount>& Rules();
     bool NormalizeDirectory(const std::wstring& input, std::wstring& normalized, std::wstring& error);
+    bool ParseExclusions(const std::wstring& text, std::vector<std::wstring>& directories, std::wstring& error);
+    // ASCII storage preserves Unicode paths even in an ANSI portable INI.
+    std::wstring EncodeExclusions(const std::vector<std::wstring>& directories);
+    bool DecodeExclusions(const std::wstring& encoded, std::vector<std::wstring>& directories, std::wstring& error);
     bool IsWithin(const std::wstring& path, const std::wstring& directory);
     bool HasSafeAncestors(const std::wstring& path);
     // Resolve and validate the explicit GUI fixture override. Empty input means no override.

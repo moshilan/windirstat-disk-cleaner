@@ -1,7 +1,7 @@
 ﻿function New-CleanupFixtureFile {
-    param([string] $Path, [int] $Size = 4097, [switch] $Recent)
+    param([string] $Path, [int] $Size = 4097, [switch] $Recent, [int] $AgeDays = 10)
     New-TestFile $Path $Size | Out-Null
-    $time = if ($Recent) { [datetime]::UtcNow } else { [datetime]::UtcNow.AddDays(-10) }
+    $time = if ($Recent) { [datetime]::UtcNow } else { [datetime]::UtcNow.AddDays(-$AgeDays) }
     [IO.File]::SetCreationTimeUtc($Path, $time)
     [IO.File]::SetLastWriteTimeUtc($Path, $time)
     return $Path
@@ -44,6 +44,17 @@ function Get-CleanupAccessRules {
 function Get-CleanupTotalsWithoutVisible {
     param([IntPtr] $Dialog)
     return ([TestDesktop]::ControlText((Get-DialogControl $Dialog 'IDC_CP_TOTALS')) -replace '\s*\|\s*(Visible:|显示：).*$', '')
+}
+
+function Start-CleanupSettingsPreview {
+    param($Runner)
+    $app = Start-TestApp -Runner $Runner
+    $selection = Wait-Until { Get-AppDialog $app 'IDC_SCAN_DUPLICATES' } 'A settings restart opens target selection without scanning'
+    Close-AppDialog $selection
+    Wait-AppIdle $app
+    Invoke-AppCommand $app 'ID_CLEANUP_PREVIEW' -Unchecked
+    $dialog = Wait-Until { Get-AppDialog $app 'IDC_CP_SCAN' } 'The settings preview opens after a real process restart'
+    return [pscustomobject]@{ App = $app; Dialog = $dialog }
 }
 
 function Move-CleanupDivider {
@@ -143,24 +154,41 @@ function Test-CleanupPreview {
     param($Context, $Case)
     $root = $Context.Fixture
     $local = Join-Path $root 'LocalAppData'
+    $roaming = Join-Path $root 'RoamingAppData'
     [IO.Directory]::CreateDirectory($local) | Out-Null
+    [IO.Directory]::CreateDirectory($roaming) | Out-Null
     [IO.File]::WriteAllText((Join-Path $root '.windirstat-cleanup-fixture'), 'WinDirStat read-only cleanup fixture v1')
     $relative = @(
         'Temp\old.tmp', 'Temp\excluded\item.tmp', 'Temp\excluded-sibling\item.temp',
         'Google\Chrome\User Data\Default\Cache\Cache_Data\entry.bin',
         'Microsoft\Edge\User Data\Profile 1\Cache\Cache_Data\entry.bin',
         'Mozilla\Firefox\Profiles\sample.default\cache2\entries\0123456789ABCDEF0123456789ABCDEF01234567',
-        'pip\Cache\http-v2\a\b\c\d\e\response.body'
+        'pip\Cache\http-v2\a\b\c\d\e\response.body',
+        'BraveSoftware\Brave-Browser\User Data\Default\Cache\Cache_Data\entry.bin',
+        'Vivaldi\User Data\Profile 2\Cache\Cache_Data\entry.bin',
+        'npm-cache\_cacache\content-v2\sha512\aa\payload',
+        'NuGet\v3-cache\source\list.dat',
+        'pip\Cache\http\a\b\c\d\e\legacy.body'
     )
     $expected = @($relative | ForEach-Object { New-CleanupFixtureFile (Join-Path $local $_) })
     $largest = New-CleanupFixtureFile (Join-Path $local 'Temp\old.tmp') 32769
     $zero = New-CleanupFixtureFile (Join-Path $local 'Temp\zero.tmp') 0
     $expected += $zero
+    $codeCache = New-CleanupFixtureFile (Join-Path $roaming 'Code\CachedData\0123456789abcdef0123456789abcdef01234567\compiled.bin') -AgeDays 100
+    $expected += $codeCache
     New-CleanupFixtureFile (Join-Path $local 'Temp\recent.tmp') -Recent | Out-Null
     New-CleanupFixtureFile (Join-Path $local 'Temp\personal.docx') | Out-Null
     New-CleanupFixtureFile (Join-Path $local 'Google\Chrome\User Data\Default\Cookies') | Out-Null
     New-CleanupFixtureFile (Join-Path $local 'Google\Chrome\User Data\Default\Service Worker\CacheStorage\personal') | Out-Null
     New-CleanupFixtureFile (Join-Path $local 'pip\Cache\wheels\package.whl') | Out-Null
+    New-CleanupFixtureFile (Join-Path $local 'BraveSoftware\Brave-Browser\User Data\Default\Local Storage\wallet') | Out-Null
+    New-CleanupFixtureFile (Join-Path $local 'Vivaldi\User Data\Profile 2\Cookies') | Out-Null
+    New-CleanupFixtureFile (Join-Path $local 'npm-cache\_npx\project\node_modules\package\index.js') | Out-Null
+    New-CleanupFixtureFile (Join-Path $local 'NuGet\plugins-cache\sentinel') | Out-Null
+    New-CleanupFixtureFile (Join-Path $roaming 'Code\User\settings.json') | Out-Null
+    New-CleanupFixtureFile (Join-Path $roaming 'Code\Backups\unsaved.txt') | Out-Null
+    New-CleanupFixtureFile (Join-Path $roaming 'Code\CachedData\not-a-commit\personal.txt') -AgeDays 100 | Out-Null
+    New-CleanupFixtureFile (Join-Path $roaming 'Code\CachedData\0123456789abcdef0123456789abcdef01234567\ten-days.bin') | Out-Null
     $before = @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash)
     $desktop = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
     $fontSize = if ($Case.FontSize -eq 200 -and ($desktop.Width -lt 2000 -or $desktop.Height -lt 1600)) { 100 } else { $Case.FontSize }
@@ -211,7 +239,7 @@ function Test-CleanupPreview {
     $notice = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_NOTICE'))
     Assert-True ($notice -match 'synthetic|合成') 'The fixture override is explicitly visible'
     Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 0 'Opening the preview does not start a scan'
-    Assert-Equal ([NativeListViewHelper]::GetItemCount($categories)) 5 'Five audited categories are available'
+    Assert-Equal ([NativeListViewHelper]::GetItemCount($categories)) 10 'Ten audited categories are available'
     Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $dialog 'IDC_CP_CANCEL'))) 'Idle preview has no running worker'
     $buttons = @([TestDesktop]::Children($dialog) | Where-Object { [TestDesktop]::Class($_) -eq 'Button' } |
         ForEach-Object { [TestDesktop]::ControlText($_) })
@@ -223,10 +251,26 @@ function Test-CleanupPreview {
     Assert-Sequence @([NativeListViewHelper]::GetItemTexts($files) | Sort-Object) @($expected | Sort-Object) `
         'Only audited old temporary and cache files appear in the GUI'
     $counts = @([NativeListViewHelper]::GetItemTexts($categories, 1))
-    Assert-Sequence $counts @('4','1','1','1','1') 'Category counts include zero-allocation candidates exactly once'
+    Assert-Sequence $counts @('4','1','1','1','2','1','1','1','1','1') 'Category counts include both pip layouts and zero-allocation candidates exactly once'
     $coverage = @([NativeListViewHelper]::GetItemTexts($categories, 4))
     Assert-Equal @($coverage | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count 0 `
-        'All five categories explain their discovery outcome'
+        'Every category explains its discovery outcome'
+    Assert-True ([NativeListViewHelper]::FocusListView($categories) -and [NativeListViewHelper]::SelectSingleItem($categories, 4)) `
+        'The pip category can be selected for all of its audited layouts'
+    $details = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_DETAILS'))
+    Assert-True ($details.Contains('pip-http-v2') -and $details.Contains('pip-http-legacy-v1')) `
+        'Category details explain modern and legacy pip rules together'
+    $legacy = Join-Path $local 'pip\Cache\http\a\b\c\d\e\legacy.body'
+    $legacyRow = [array]::IndexOf([NativeListViewHelper]::GetItemTexts($files), $legacy)
+    Assert-True ([NativeListViewHelper]::FocusListView($files) -and [NativeListViewHelper]::SelectSingleItem($files, $legacyRow)) `
+        'A legacy pip candidate can be selected for its actual matching rule'
+    $details = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_DETAILS'))
+    Assert-True ($details.Contains($legacy) -and $details.Contains('pip-http-legacy-v1')) `
+        'Candidate details use the actual legacy rule instead of the category primary rule'
+    $riskValues = @([NativeListViewHelper]::GetItemTexts($files, 5))
+    Assert-True (@($riskValues | Where-Object { $_ -match 'regener|再生' }).Count -gt 0 -and
+        @($riskValues | Where-Object { $_ -match 'review|人工' }).Count -gt 0) `
+        'The list distinguishes regenerable caches from candidates requiring judgment'
     foreach ($column in 1,2,3,4,5) {
         $values = @([NativeListViewHelper]::GetItemTexts($files, $column))
         Assert-Equal @($values | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count 0 `
@@ -306,7 +350,7 @@ function Test-CleanupPreview {
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Wait-CleanupPreviewIdle $dialog
     $afterExclusion = @([NativeListViewHelper]::GetItemTexts($files))
-    Assert-Equal $afterExclusion.Count 7 'Excluding one directory removes exactly one candidate'
+    Assert-Equal $afterExclusion.Count ($expected.Count - 1) 'Excluding one directory removes exactly one candidate'
     Assert-True ((Join-Path $local 'Temp\excluded-sibling\item.temp') -in $afterExclusion) `
         'A similarly named sibling is not accidentally excluded'
     Assert-True ((Join-Path $local 'Temp\excluded\item.tmp') -notin $afterExclusion) 'The excluded file is absent'
@@ -316,7 +360,7 @@ function Test-CleanupPreview {
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_STATUS')) -match 'absolute|绝对') `
         'An invalid exclusion is explained without starting a scan'
-    Set-CleanupExclusions $dialog $local
+    Set-CleanupExclusions $dialog ($local + "`r`n" + $roaming)
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Wait-CleanupPreviewIdle $dialog
     Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 0 'Excluding the entire anchor produces an explicit empty preview'
@@ -383,6 +427,119 @@ function Test-CleanupPreview {
     Close-AppDialog $dialog
     Wait-AppIdle $app
     Stop-TestApp $app
+
+    # Restart the shipping process against the same portable settings, including
+    # an ANSI/ASCII INI so Unicode round trips cannot depend on a UTF-16 test INI.
+    $persistentRoot = Join-Path $root 'persistent-fixture'
+    $persistentLocal = Join-Path $persistentRoot 'LocalAppData'
+    $persistentRoaming = Join-Path $persistentRoot 'RoamingAppData'
+    $unicodeExcluded = Join-Path $persistentLocal 'Temp\排除 空格;é'
+    $roamingExcluded = Join-Path $persistentRoaming 'Code\CachedData\0123456789abcdef0123456789abcdef01234567'
+    $persistentFiles = @(
+        (New-CleanupFixtureFile (Join-Path $unicodeExcluded 'item.tmp')),
+        (New-CleanupFixtureFile (Join-Path $persistentLocal 'Temp\排除 空格;é-sibling\item.tmp')),
+        (New-CleanupFixtureFile (Join-Path $roamingExcluded 'compiled.bin') -AgeDays 100)
+    )
+    [IO.File]::WriteAllText((Join-Path $persistentRoot '.windirstat-cleanup-fixture'), 'WinDirStat read-only cleanup fixture v1')
+    $persistentHashes = @($persistentFiles | Get-FileHash | ForEach-Object Hash)
+    $settingsRunner = New-TestRunner @{
+        Options = @{ LanguageId = $Case.Language }
+        DriveSelect = @{ FilteringExcludeDirs = 'original-analysis-only' }
+    }
+    $initialIni = [IO.File]::ReadAllText($settingsRunner.Ini)
+    [IO.File]::WriteAllText($settingsRunner.Ini, $initialIni, [Text.Encoding]::ASCII)
+    $settingsRunner | Add-Member -NotePropertyName Environment -NotePropertyValue @{ WDS_CLEANUP_TEST_ROOT = $persistentRoot }
+    $session = Start-CleanupSettingsPreview $settingsRunner
+    $settingsDialog = $session.Dialog
+    Set-CleanupExclusions $settingsDialog ($unicodeExcluded + "\`r`n" + $roamingExcluded + "\`r`n" + $unicodeExcluded.ToUpperInvariant())
+    Close-AppDialog $settingsDialog
+    Wait-AppIdle $session.App
+    Stop-TestApp $session.App
+
+    $session = Start-CleanupSettingsPreview $settingsRunner
+    $settingsDialog = $session.Dialog
+    $settingsFiles = Get-DialogControl $settingsDialog 'IDC_CP_FILES'
+    $savedText = $unicodeExcluded + "`r`n" + $roamingExcluded
+    Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $settingsDialog 'IDC_CP_EXCLUSIONS'))) $savedText `
+        'A real restart restores normalized, deduplicated Unicode exclusions from an ASCII portable INI'
+    Assert-Equal ([NativeListViewHelper]::GetItemCount($settingsFiles)) 0 'Restoring saved exclusions never starts a scan'
+    Invoke-CleanupButton $settingsDialog 'IDC_CP_SCAN'
+    Wait-CleanupPreviewIdle $settingsDialog
+    Assert-Sequence @([NativeListViewHelper]::GetItemTexts($settingsFiles)) @($persistentFiles[1]) `
+        'Restarted exclusions suppress both anchors while preserving the same-prefix sibling'
+    Set-CleanupExclusions $settingsDialog 'relative-invalid-draft'
+    Assert-Equal ([NativeListViewHelper]::GetItemCount($settingsFiles)) 0 'An invalid exclusion draft invalidates old results immediately'
+    Close-AppDialog $settingsDialog
+    Wait-AppIdle $session.App
+    Stop-TestApp $session.App
+
+    $session = Start-CleanupSettingsPreview $settingsRunner
+    $settingsDialog = $session.Dialog
+    Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $settingsDialog 'IDC_CP_EXCLUSIONS'))) $savedText `
+        'An invalid draft does not replace the last valid saved exclusion list'
+    Set-CleanupExclusions $settingsDialog ''
+    Close-AppDialog $settingsDialog
+    Wait-AppIdle $session.App
+    Stop-TestApp $session.App
+
+    $session = Start-CleanupSettingsPreview $settingsRunner
+    $settingsDialog = $session.Dialog
+    $settingsFiles = Get-DialogControl $settingsDialog 'IDC_CP_FILES'
+    Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $settingsDialog 'IDC_CP_EXCLUSIONS'))) '' `
+        'Clearing exclusions survives another process restart'
+    Invoke-CleanupButton $settingsDialog 'IDC_CP_SCAN'
+    Wait-CleanupPreviewIdle $settingsDialog
+    Assert-Sequence @([NativeListViewHelper]::GetItemTexts($settingsFiles) | Sort-Object) @($persistentFiles | Sort-Object) `
+        'A saved empty list restores all eligible synthetic candidates'
+    Assert-True ([IO.File]::ReadAllText($settingsRunner.Ini).Contains('FilteringExcludeDirs=original-analysis-only')) `
+        'Cleanup persistence leaves the original space-analysis exclusion setting unchanged'
+    $iniAttributes = [IO.File]::GetAttributes($settingsRunner.Ini)
+    $iniBeforeFailure = [IO.File]::ReadAllText($settingsRunner.Ini)
+    try {
+        [IO.File]::SetAttributes($settingsRunner.Ini, $iniAttributes -bor [IO.FileAttributes]::ReadOnly)
+        Set-CleanupExclusions $settingsDialog $unicodeExcluded
+        $saveFailure = [TestDesktop]::ControlText((Get-DialogControl $settingsDialog 'IDC_CP_STATUS'))
+        Assert-True ($saveFailure -match 'sav|保存') 'An unwritable synthetic INI produces a visible persistence failure'
+        if ([TestDesktop]::IsWindowEnabled((Get-DialogControl $settingsDialog 'IDC_CP_SCAN'))) {
+            Invoke-CleanupButton $settingsDialog 'IDC_CP_SCAN'
+        }
+        Assert-Equal ([NativeListViewHelper]::GetItemCount($settingsFiles)) 0 'A failed exclusion save cannot silently reuse stale preview results'
+        Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $settingsDialog 'IDC_CP_CANCEL'))) `
+            'A failed exclusion save does not launch a worker'
+        Assert-Equal ([IO.File]::ReadAllText($settingsRunner.Ini)) $iniBeforeFailure `
+            'A failed save preserves the existing portable configuration'
+    } finally { [IO.File]::SetAttributes($settingsRunner.Ini, $iniAttributes) }
+    Set-CleanupExclusions $settingsDialog ''
+    Close-AppDialog $settingsDialog
+    Wait-AppIdle $session.App
+    Stop-TestApp $session.App
+
+    $corruptRunner = New-TestRunner @{
+        Options = @{ LanguageId = $Case.Language }
+        CleanupPreview = @{ ExcludedDirectoriesUtf16Hex = 'v1:00G0' }
+    }
+    $corruptRunner | Add-Member -NotePropertyName Environment -NotePropertyValue @{ WDS_CLEANUP_TEST_ROOT = $persistentRoot }
+    $session = Start-CleanupSettingsPreview $corruptRunner
+    $settingsDialog = $session.Dialog
+    $settingsFiles = Get-DialogControl $settingsDialog 'IDC_CP_FILES'
+    if ([TestDesktop]::IsWindowEnabled((Get-DialogControl $settingsDialog 'IDC_CP_SCAN'))) {
+        Invoke-CleanupButton $settingsDialog 'IDC_CP_SCAN'
+    }
+    $corruptStatus = [TestDesktop]::ControlText((Get-DialogControl $settingsDialog 'IDC_CP_STATUS'))
+    Assert-True ($corruptStatus -match 'invalid|corrupt|无效|损坏') 'Corrupt saved exclusions are explained instead of silently dropped'
+    Assert-Equal ([NativeListViewHelper]::GetItemCount($settingsFiles)) 0 'Corrupt saved exclusions never permit a scan with an empty fallback'
+    Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $settingsDialog 'IDC_CP_CANCEL'))) `
+        'Corrupt saved exclusions start no worker'
+    Set-CleanupExclusions $settingsDialog ''
+    Invoke-CleanupButton $settingsDialog 'IDC_CP_SCAN'
+    Wait-CleanupPreviewIdle $settingsDialog
+    Assert-Equal ([NativeListViewHelper]::GetItemCount($settingsFiles)) $persistentFiles.Count `
+        'Explicitly clearing a corrupt exclusion setting permits an ordinary read-only preview'
+    Close-AppDialog $settingsDialog
+    Wait-AppIdle $session.App
+    Stop-TestApp $session.App
+    Assert-Sequence @($persistentFiles | Get-FileHash | ForEach-Object Hash) $persistentHashes `
+        'Persistence, restart, invalid input and save-failure checks leave every synthetic source file unchanged'
 
     $invalid = Join-Path $root 'invalid-override'
     [IO.Directory]::CreateDirectory((Join-Path $invalid 'LocalAppData')) | Out-Null

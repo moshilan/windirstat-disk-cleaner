@@ -1,10 +1,10 @@
 ﻿# 垃圾清理：第一阶段只读预览
 
-本阶段仅支持本机固定NTFS磁盘上的目录。新增原生独立窗口，不改变现有空间分析、大文件与重复检测算法。菜单入口为“清理→垃圾清理（只读预览）…”，无需先扫描磁盘。打开不自动扫描；本模块没有删除按钮、执行器或文件写操作。
+本阶段仅支持本机固定NTFS磁盘上的目录。新增原生独立窗口，不改变现有空间分析、大文件与重复检测算法。菜单入口为“清理→垃圾清理（只读预览）…”，无需先扫描磁盘。打开不自动扫描；本模块没有删除按钮或执行器，不写入扫描目标，仅保存用户授权的排除设置。
 
 ## 当前规则
 
-所有规则均要求创建和修改至少7天，所有候选默认未勾选，风险保守标为中等。7天是项目筛选策略，不是文件无用或可安全删除的保证。
+除VS Code编译缓存采用90天外，规则均要求创建和修改至少7天。所有候选默认未勾选，风险保守标为中等；另列可再生缓存或需人工判断的说明，并解释受保护范围。年龄是项目筛选策略，不是文件无用或可安全删除的保证。
 
 | 类别 | 支持的默认目录和条件 |
 | --- | --- |
@@ -12,15 +12,26 @@
 | Chrome HTTP缓存 | Google/Chrome/User Data/{Default,Profile 数字}/Cache/Cache_Data |
 | Edge HTTP缓存 | Microsoft/Edge/User Data/{Default,Profile 数字}/Cache/Cache_Data |
 | Firefox HTTP缓存 | Mozilla/Firefox/Profiles/*/cache2/entries |
-| pip HTTP缓存 | pip/Cache/http-v2，适配23.3及以上默认格式；不含wheels、虚拟环境或项目依赖 |
+| pip HTTP缓存 | LocalAppData下pip/Cache/http-v2及旧格式http，合并同一类别；不含wheels、虚拟环境或项目依赖 |
+| Brave HTTP缓存 | LocalAppData下BraveSoftware/Brave-Browser/User Data/{Default,Profile 数字}/Cache/Cache_Data |
+| Vivaldi HTTP缓存 | LocalAppData下Vivaldi/User Data/{Default,Profile 数字}/Cache/Cache_Data |
+| VS Code编译缓存 | RoamingAppData下Code/CachedData/40位十六进制commit子目录，文件创建及修改均至少90天；仅稳定版默认位置，仍可能属于当前版本，需人工判断 |
+| npm下载缓存 | LocalAppData下npm-cache/_cacache；不含_npx、node_modules、配置或项目 |
+| NuGet HTTP缓存 | LocalAppData下NuGet/v3-cache；不含项目直接引用的.nuget/packages、plugins-cache或NuGet.Config |
 
 只支持这些精确存在的目录，不追踪策略/命令行指定的缓存位置，不猜测未知软件或未知版本结构。未在本机读取浏览器真实缓存以验证安装版本；规则布局依据官方文档/源码及合成样本验证。浏览器可能正在运行，本阶段不声称文件未被占用；后续执行前需关闭应用并重新核验。缓存减少会造成重新下载和离线访问影响。
 
 官方依据：[Chromium缓存目录源码](https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/network_service_instance_impl.h)、[Windows路径实现](https://chromium.googlesource.com/chromium/src/+/HEAD/chrome/common/chrome_paths_win.cc)、[Edge默认用户目录](https://learn.microsoft.com/en-us/deployedge/edge-learnmore-create-user-directory-vars)、[Edge缓存重定向策略](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/DiskCacheDir)、[Firefox HTTP缓存格式](https://firefox-source-docs.mozilla.org/networking/cache2/doc.html)、[pip缓存说明](https://pip.pypa.io/en/stable/topics/caching/)。
 
+新增来源：[Brave官方安装常量](https://raw.githubusercontent.com/brave/brave-core/master/chromium_src/chrome/install_static/chromium_install_modes.h)确定BraveSoftware与Brave-Browser；[Vivaldi默认配置路径](https://help.vivaldi.com/desktop/privacy/preventing-vivaldi-profiles-from-being-uploaded-to-git-repositories/)确定根目录，其Cache_Data子树依据Chromium实现推断，仅识别确切存在的目录；[npm官方缓存说明](https://docs.npmjs.com/cli/v11/commands/npm-cache/)、[NuGet缓存与全局包区分](https://learn.microsoft.com/en-us/nuget/consume-packages/managing-the-global-packages-and-cache-folders)确定两个开发工具的精确下载缓存。[VS Code用户目录实现](https://raw.githubusercontent.com/microsoft/vscode/main/src/vs/platform/environment/node/userDataPath.ts)及[缓存清理源码](https://raw.githubusercontent.com/microsoft/vscode/main/src/vs/code/electron-utility/sharedProcess/contrib/codeCacheCleaner.ts)说明APPDATA、按commit保存及稳定版约90天策略；本工具不判断当前commit，采用文件创建和修改年龄筛选，不能等同于VS Code自身清理条件，也不推断便携、自定义或Insiders位置。
+
+浏览器HTTP、pip、npm与NuGet缓存通常可重新获取，但可能影响离线使用、后续下载与安装速度；Temp和VS Code编译数据另标需人工判断。钱包、密码、Cookie、会话、站点存储、编辑器User/Backups/workspaceStorage、源码、项目依赖与配置始终不因类别扩展而纳入。未知软件、其他缓存位置和整个软件数据目录不扫描。
+
 ## 界面与统计
 
-上方分类勾选决定扫描范围，下方候选勾选仅影响选择汇总。文件明细显示路径、分类、磁盘占用、规则版本、原因、风险；选中行可查看完整路径和规则详情。排除框每行一个本机绝对目录，也可用“添加排除目录”。类别或排除变化后旧结果失效，须重新扫描；本阶段配置仅在窗口会话内使用。
+上方分类勾选决定扫描范围，下方候选勾选仅影响选择汇总。文件明细显示路径、分类、磁盘占用、实际匹配规则版本、原因、风险；选中行可查看完整路径和规则详情，选中分类可查看本类全部规则。排除框每行一个本机绝对目录，也可用“添加排除目录”。类别或排除变化后旧结果失效，须重新扫描。
+
+有效排除目录复用软件现有INI或注册表配置存储，在独立CleanupPreview设置中保存并读回核验；关闭窗口或正常重启后恢复，打开仍不自动扫描。规范化路径并按大小写不敏感去重，支持中文、空格及分号；清空也会保存。无效草稿保留上一份有效设置，保存失败明确提示并阻止本次扫描；损坏的保存值不静默丢弃，须由用户更正或清空。该设置与原空间分析的排除项独立，不保存候选勾选或扫描快照。保存内容使用ASCII版本化编码，以兼容普通便携INI的Unicode路径。
 
 窗口支持最大化、恢复及四边四角拖动缩放，最小尺寸按按钮和区域所需空间计算，不再锁定初始尺寸。可拖动分隔线位于分类列表与排序栏之间、候选列表与详情之间，以及排除框与诊断日志之间，命中间隙均为8DLU；日志上边界可调整日志高度。点击占用列或排序按钮按分配大小升降排列。隐藏空文件（0 字节）仅隐藏逻辑长度为0的候选，不改变总候选、分类或勾选统计；有内容但分配占用为0的文件仍保留。排序和筛选保留文件对应的选择，全选可见候选只影响显示项，全部取消同时清除隐藏项的选择。
 
@@ -39,6 +50,8 @@
 - 本阶段没有安全执行器，不宣称已防护WinDirStat原有删除/任意命令入口，也不修改它们。
 
 ## 验证与交付
+
+2026-10-23规则扩展及排除持久化已完成实现和静态审查，当前待云端编译与合成运行验证，不记为验收通过。用户已确认上一版2201人工交互验收通过，以下保留历史记录。
 
 2026-10-22人工验收再排查：2199的版本、路径、哈希与交付一致，原用户实例没有合成启动参数。确认旧日志框固定24DLU，既有两条分隔均不含日志上边界；旧测试只覆盖这两条和8条候选，不能代表日志拖动或10000条候选的实际操作。修复022c83f仅增加现有日志边界的捕获、布局偏移和高度约束，未改筛选逻辑、规则、扫描或删除能力。
 
@@ -68,8 +81,8 @@
 
 云端中英文截图复核未发现明显乱码、重叠和按钮裁切，完整路径和原因可滚动/详情查看；多显示器、不同高DPI及真实软件各版本布局尚未覆盖。迭代失败与最小修正记于WORKLOG，不将失败轮次记为通过。多行文本WM_SETTEXT不产生[EN_CHANGE](https://learn.microsoft.com/en-us/windows/win32/controls/en-change)，故“添加排除目录”程序设置后显式使预览失效，测试也模拟用户编辑通知。
 
-GUI测试仅在显式WDS_CLEANUP_TEST_ROOT指向系统Temp/WinDirStatTests-*运行目录、目录链安全且fixture标记匹配时映射LocalAppData；窗口显示合成模式。无效覆盖禁用扫描，不回退真实缓存。该接口只用于只读测试，不代表后续执行授权。
+GUI测试仅在显式WDS_CLEANUP_TEST_ROOT指向系统Temp/WinDirStatTests-*运行目录、目录链安全且fixture标记匹配时映射LocalAppData及同级RoamingAppData；窗口显示合成模式。无效覆盖禁用扫描，不回退真实缓存；坏Roaming锚点单独标记相关类别失败，不丢失已完成的Local结果。该接口只用于只读测试，不代表后续执行授权。
 
 ## 下一阶段
 
-自定义规则编辑、排除持久化、应用占用检查、规则兼容样本扩充、缓存配对/分组（例如pip HTTP元数据与.body）、执行前重新核验与安全执行器、操作日志、回收站和其他类别均未开发。路径核验不保证消除外部进程持续修改引发的所有竞态，不可直接复用预览结果执行删除。
+自定义规则编辑、应用占用检查、真实版本兼容样本扩充、缓存配对/分组（例如pip HTTP元数据与.body）、执行前重新核验与安全执行器、操作日志、回收站和其他类别均未开发。路径核验不保证消除外部进程持续修改引发的所有竞态，不可直接复用预览结果执行删除。

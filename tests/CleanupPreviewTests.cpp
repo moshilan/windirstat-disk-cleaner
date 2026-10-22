@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <winioctl.h>
 #include <sddl.h>
+#include <algorithm>
 #include <filesystem>
 #include <cstring>
 #include <fstream>
@@ -86,14 +87,22 @@ int wmain(int argc, wchar_t** argv)
             throw std::runtime_error("Refusing an existing or unowned fixture path");
         fs::create_directories(root);
         const auto now = Now(), day = std::uint64_t(86400) * 10000000, old = now - 10 * day;
-        const auto local = root / L"LocalAppData", temp = local / L"Temp";
+        const auto local = root / L"LocalAppData", temp = local / L"Temp", roaming = root / L"RoamingAppData";
         const auto chrome = local / L"Google/Chrome/User Data/Default/Cache/Cache_Data";
         const auto edge = local / L"Microsoft/Edge/User Data/Profile 1/Cache/Cache_Data";
         const auto firefox = local / L"Mozilla/Firefox/Profiles/test.default/cache2/entries";
         const auto pip = local / L"pip/Cache/http-v2/a/b/c/d/e";
+        const auto brave = local / L"BraveSoftware/Brave-Browser/User Data/Default/Cache/Cache_Data";
+        const auto vivaldi = local / L"Vivaldi/User Data/Profile 2/Cache/Cache_Data";
+        const auto code = roaming / L"Code/CachedData/0123456789abcdef0123456789abcdef01234567";
+        const auto npm = local / L"npm-cache/_cacache/content-v2/sha512/aa";
+        const auto nuget = local / L"NuGet/v3-cache/source";
+        const auto legacyPip = local / L"pip/Cache/http/a/b/c/d/e";
         std::vector<fs::path> expected{ temp/L"old.tmp", temp/L"nested/old.temp", chrome/L"cache.bin",
-            edge/L"cache.bin", firefox/L"0123456789ABCDEF0123456789ABCDEF01234567", pip/L"response.body" };
+            edge/L"cache.bin", firefox/L"0123456789ABCDEF0123456789ABCDEF01234567", pip/L"response.body",
+            brave/L"cache.bin", vivaldi/L"cache.bin", code/L"compiled.bin", npm/L"payload", nuget/L"list.dat", legacyPip/L"response.body" };
         for (size_t i = 0; i < expected.size(); ++i) Write(expected[i], std::string(4097 + i * 17, char('a' + i)), old);
+        Age(code/L"compiled.bin", now - 100 * day, now - 100 * day);
         expected.push_back(temp/L"zero.tmp"); Write(expected.back(), "", old);
         expected.push_back(temp/L"resident.tmp"); Write(expected.back(), "tiny", old);
         Write(temp/L"recent.tmp", "recent", now);
@@ -105,14 +114,27 @@ int wmain(int argc, wchar_t** argv)
         Write(local/L"pip/Cache/wheels/package.whl", "offline wheel", old);
         Write(local/L"UnknownApp/Cache/unknown.bin", "unknown purpose", old);
         Write(local/L"Google/Chrome/User Data/Custom/Cache/Cache_Data/unknown.bin", "unknown profile", old);
+        Write(local/L"BraveSoftware/Brave-Browser/User Data/Default/Local Storage/wallet", "wallet sentinel", old);
+        Write(local/L"Vivaldi/User Data/Profile 2/Cookies", "cookie sentinel", old);
+        Write(local/L"npm-cache/_npx/project/node_modules/package/index.js", "execution cache outside whitelist", old);
+        Write(local/L"npm-cache/.npmrc", "credential sentinel", old);
+        Write(local/L"NuGet/plugins-cache/sentinel", "plugin cache outside whitelist", old);
+        Write(root/L".nuget/packages/project/package.dll", "direct project dependency", old);
+        Write(roaming/L"Code/User/settings.json", "user settings", old);
+        Write(roaming/L"Code/Backups/unsaved.txt", "unsaved work", old);
+        Write(roaming/L"Code/User/workspaceStorage/history", "workspace user data", old);
+        Write(roaming/L"Code/CachedData/not-a-commit/personal.txt", "unknown folder", now - 100 * day);
+        Write(code/L"ten-days.bin", "not old enough for code cache", old);
         auto before = Snapshot(root);
-        Cleanup::ScanOptions options; options.localAppData = local.wstring(); options.now = now;
+        Cleanup::ScanOptions options; options.localAppData = local.wstring(); options.roamingAppData = roaming.wstring(); options.now = now;
         auto result = Cleanup::Scan(options);
         Check(!result.incomplete && !result.cancelled, "Normal preview is complete");
         Check(result.candidates.size() == expected.size(), "Only audited old temporary/cache payloads are candidates");
-        for (const auto& category : result.coverage)
-            Check(category.state == Cleanup::CoverageState::Matches && category.rootsFound == 1 && category.failures == 0,
+        for (size_t i = 0; i < result.coverage.size(); ++i) {
+            const auto& category = result.coverage[i];
+            Check(category.state == Cleanup::CoverageState::Matches && category.rootsFound == (i == static_cast<size_t>(Cleanup::Category::Pip) ? 2 : 1) && category.failures == 0,
                 "Each audited category reports an existing exact cache root and matching candidates");
+        }
         for (const auto& path : expected) Check(Has(result, path), "Expected precise whitelist payload found");
         std::uint64_t count = 0, allocation = 0;
         for (const auto& category : result.categories) { count += category.files; allocation += category.allocatedBytes; }
@@ -121,6 +143,9 @@ int wmain(int argc, wchar_t** argv)
         for (const auto& item : result.candidates) {
             Check(!item.ruleId.empty() && !item.reasonKey.empty() && item.ruleVersion != 0, "Candidate has versioned matching reason");
             Check(item.allocatedBytes == Allocation(item.path), "Candidate allocation matches filesystem metadata including resident and empty files");
+            Check(item.assessment == (item.category == Cleanup::Category::Temporary || item.category == Cleanup::Category::VSCode ?
+                Cleanup::Assessment::ManualReview : Cleanup::Assessment::RegenerableCache),
+                "Regenerable caches are distinct from temporary and compiled-cache candidates requiring judgment");
             candidateAllocation += item.allocatedBytes;
         }
         Check(candidateAllocation == allocation, "Category allocation equals unique candidate allocation");
@@ -141,21 +166,73 @@ int wmain(int argc, wchar_t** argv)
         result = Cleanup::Scan(restricted);
         Check(!Has(result, temp/L"old.tmp") && Has(result, expected[2]), "Protected roots override a matching rule without hiding other categories");
         Check(result.coverage[0].state == Cleanup::CoverageState::Skipped, "Excluded roots do not claim there are no matching files");
-        const auto emptyLocal = root/L"EmptyLocalAppData";
+        const auto emptyLocal = root/L"EmptyLocalAppData", emptyRoaming = root/L"EmptyRoamingAppData";
         fs::create_directories(emptyLocal);
-        restricted = options; restricted.localAppData = emptyLocal.wstring();
+        fs::create_directories(emptyRoaming);
+        restricted = options; restricted.localAppData = emptyLocal.wstring(); restricted.roamingAppData = emptyRoaming.wstring();
         result = Cleanup::Scan(restricted);
-        for (const auto& category : result.coverage)
-            Check(category.state == Cleanup::CoverageState::Missing && category.missingRoots == 1,
+        for (size_t i = 0; i < result.coverage.size(); ++i) {
+            const auto& category = result.coverage[i];
+            Check(category.state == Cleanup::CoverageState::Missing && category.missingRoots == (i == static_cast<size_t>(Cleanup::Category::Pip) ? 2 : 1),
                 "Missing audited directories are distinct from an empty scan");
+        }
         for (const auto& relative : { L"Temp", L"Google/Chrome/User Data/Default/Cache/Cache_Data",
-            L"Microsoft/Edge/User Data/Profile 2/Cache/Cache_Data", L"Mozilla/Firefox/Profiles/empty.default/cache2/entries", L"pip/Cache/http-v2" })
+            L"Microsoft/Edge/User Data/Profile 2/Cache/Cache_Data", L"Mozilla/Firefox/Profiles/empty.default/cache2/entries", L"pip/Cache/http-v2", L"pip/Cache/http",
+            L"BraveSoftware/Brave-Browser/User Data/Default/Cache/Cache_Data", L"Vivaldi/User Data/Default/Cache/Cache_Data", L"npm-cache/_cacache", L"NuGet/v3-cache" })
             fs::create_directories(emptyLocal/relative);
+        fs::create_directories(emptyRoaming/L"Code/CachedData/0123456789abcdef0123456789abcdef01234567");
         Write(emptyLocal/L"Temp/recent.tmp", "recent", now);
         result = Cleanup::Scan(restricted);
-        for (const auto& category : result.coverage)
-            Check(category.state == Cleanup::CoverageState::NoMatches && category.rootsFound == 1 && category.failures == 0,
+        for (size_t i = 0; i < result.coverage.size(); ++i) {
+            const auto& category = result.coverage[i];
+            Check(category.state == Cleanup::CoverageState::NoMatches && category.rootsFound == (i == static_cast<size_t>(Cleanup::Category::Pip) ? 2 : 1) && category.failures == 0,
                 "Existing empty or ineligible cache roots report no matching files without scan failure");
+        }
+        restricted = options; restricted.roamingAppData = (root/L"MissingRoamingAppData").wstring();
+        result = Cleanup::Scan(restricted);
+        Check(result.incomplete && Has(result, temp/L"old.tmp") && !Has(result, code/L"compiled.bin") &&
+            result.coverage[static_cast<size_t>(Cleanup::Category::VSCode)].state == Cleanup::CoverageState::Failed &&
+            result.coverage[0].state == Cleanup::CoverageState::Matches,
+            "Unavailable roaming anchor fails only its category without losing successful local candidates");
+        restricted = options; restricted.protectedDirectories = { roaming.wstring() };
+        result = Cleanup::Scan(restricted);
+        Check(!Has(result, code/L"compiled.bin") && Has(result, brave/L"cache.bin") &&
+            result.coverage[static_cast<size_t>(Cleanup::Category::VSCode)].state == Cleanup::CoverageState::Skipped,
+            "Protected roaming anchor wins over a cache rule without suppressing local categories");
+        // Missing one pip layout must not erase matches from the other layout.
+        restricted = options; restricted.localAppData = (root/L"LegacyOnly").wstring();
+        Write(fs::path(restricted.localAppData)/L"pip/Cache/http/entry", "legacy only", old);
+        result = Cleanup::Scan(restricted);
+        Check(result.coverage[static_cast<size_t>(Cleanup::Category::Pip)].state == Cleanup::CoverageState::Matches &&
+            result.categories[static_cast<size_t>(Cleanup::Category::Pip)].files == 1,
+            "Legacy HTTP matches and a missing modern pip directory share one accurate category");
+        const auto overlapLocal = root/L"OverlapLocal", overlapRoaming = overlapLocal/L"Temp/Roaming";
+        const auto overlapFile = overlapRoaming/L"Code/CachedData/0123456789abcdef0123456789abcdef01234567/cache.tmp";
+        Write(overlapFile, "one physical file seen by two rules", now - 100 * day);
+        restricted = options; restricted.localAppData = overlapLocal.wstring(); restricted.roamingAppData = overlapRoaming.wstring();
+        result = Cleanup::Scan(restricted);
+        Check(result.candidates.size() == 1 && result.skipped[static_cast<size_t>(Cleanup::SkipReason::Duplicate)] == 1,
+            "Overlapping audited roots still count the same physical file only once across anchors");
+        Check(result.categories[0].allocatedBytes == Allocation(overlapFile) &&
+            result.categories[static_cast<size_t>(Cleanup::Category::VSCode)].allocatedBytes == 0,
+            "Cross-anchor deduplication does not inflate category allocation or the release upper bound");
+        restricted = options; restricted.enabled.fill(false);
+        for (const auto category : { Cleanup::Category::Pip, Cleanup::Category::Brave, Cleanup::Category::Vivaldi })
+            restricted.enabled[static_cast<size_t>(category)] = true;
+        restricted.maximumCandidates = 2;
+        result = Cleanup::Scan(restricted);
+        Check(result.limitReached && result.coverage[static_cast<size_t>(Cleanup::Category::Pip)].state == Cleanup::CoverageState::Partial &&
+            result.coverage[static_cast<size_t>(Cleanup::Category::Vivaldi)].state == Cleanup::CoverageState::NotScanned,
+            "A limit between modern and legacy pip rules marks their shared category partial, leaving untouched categories unscanned");
+        restricted.maximumCandidates = 50000;
+        std::stop_source betweenPipRules;
+        result = Cleanup::Scan(restricted, betweenPipRules.get_token(), [&](const Cleanup::Progress& progress) {
+            if (progress.category == Cleanup::Category::Brave) betweenPipRules.request_stop();
+        });
+        Check(result.cancelled && Has(result, pip/L"response.body") && !Has(result, legacyPip/L"response.body") &&
+            result.coverage[static_cast<size_t>(Cleanup::Category::Pip)].state == Cleanup::CoverageState::Partial &&
+            result.coverage[static_cast<size_t>(Cleanup::Category::Vivaldi)].state == Cleanup::CoverageState::NotScanned,
+            "Cancellation between layouts never claims that the entire pip category was scanned");
         // A file's attributes may remain readable through its parent directory.
         // Deny directory enumeration to create a deterministic read failure.
         const auto deniedPath = temp/L"blocked";
@@ -184,6 +261,27 @@ int wmain(int argc, wchar_t** argv)
         Check(!Cleanup::NormalizeDirectory(L"Temp", normalized, error), "Relative exclusion is rejected");
         Check(!Cleanup::NormalizeDirectory(L"C:\\", normalized, error), "Volume root is rejected");
         Check(!Cleanup::NormalizeDirectory(L"C:\\Temp\\*", normalized, error), "Wildcard directory is rejected");
+        std::vector<std::wstring> parsed, decoded;
+        const auto unicodeExclusion = (temp/L"排除 空格;é").wstring();
+        const auto secondExclusion = (roaming/L"Code/CachedData").wstring();
+        Check(Cleanup::ParseExclusions(unicodeExclusion + L"\\\r\n" + secondExclusion + L"\r\n" + unicodeExclusion, parsed, error) && parsed.size() == 2,
+            "Exclusions normalize and deduplicate complete Unicode directory lines");
+        const auto encoded = Cleanup::EncodeExclusions(parsed);
+        Check(std::all_of(encoded.begin(), encoded.end(), [](wchar_t c) { return c < 128; }) &&
+            Cleanup::DecodeExclusions(encoded, decoded, error) && decoded == parsed,
+            "Dedicated ASCII setting round trips Unicode exclusions without INI code page loss");
+        Check(!Cleanup::DecodeExclusions(encoded + L",00G0", decoded, error) && decoded.empty(),
+            "A corrupt later entry never returns earlier saved exclusions as a partial success");
+        Check(Cleanup::ParseExclusions(L"", parsed, error) && parsed.empty() &&
+            Cleanup::DecodeExclusions(Cleanup::EncodeExclusions(parsed), decoded, error) && decoded.empty(),
+            "An explicit empty exclusion list survives encoding and decoding");
+        for (const auto* invalid : { L"v9:0041", L"v1:00G0", L"v1:004", L"v1:0000", L"v1:0043", L"v1:0043003A005C" }) {
+            decoded = { unicodeExclusion };
+            Check(!Cleanup::DecodeExclusions(invalid, decoded, error) && decoded.empty(),
+                "Malformed, unknown-version and unsafe saved exclusions fail without a partial list");
+        }
+        Check(!Cleanup::ParseExclusions(unicodeExclusion + L"\r\nrelative", parsed, error) && parsed.empty(),
+            "Invalid exclusion drafts do not yield a partially valid replacement");
         Check(Cleanup::IsWithin((temp/L"nested").wstring(), temp.wstring()), "Directory boundary includes descendants");
         Check(!Cleanup::IsWithin((local/L"TempSibling").wstring(), temp.wstring()), "Directory boundary rejects same-prefix sibling");
         restricted = options; restricted.maximumCandidates = 1;
@@ -213,8 +311,15 @@ int wmain(int argc, wchar_t** argv)
         restricted = options; restricted.localAppData = (root/L"linked-anchor").wstring();
         Junction(restricted.localAppData, local);
         result = Cleanup::Scan(restricted);
-        Check(result.candidates.empty() && result.incomplete, "An ancestor junction cannot redirect the cache anchor");
+        Check(!Has(result, temp/L"old.tmp") && Has(result, code/L"compiled.bin") && result.incomplete,
+            "An ancestor junction cannot redirect a local anchor or suppress an independent valid roaming anchor");
         Check(result.coverage[0].state == Cleanup::CoverageState::Failed, "Unverifiable anchor reports failure for enabled categories");
+        restricted = options; restricted.roamingAppData = (root/L"linked-roaming").wstring();
+        Junction(restricted.roamingAppData, roaming);
+        result = Cleanup::Scan(restricted);
+        Check(result.incomplete && !Has(result, code/L"compiled.bin") && Has(result, temp/L"old.tmp") &&
+            result.coverage[static_cast<size_t>(Cleanup::Category::VSCode)].state == Cleanup::CoverageState::Failed,
+            "A roaming ancestor junction never redirects cache recognition or disables independent local results");
         Check(Snapshot(outside).size() == 1, "Outside sentinel remains intact");
         std::cout << "{\"status\":\"PASS\",\"checks\":" << checks << "}" << std::endl;
         return 0;

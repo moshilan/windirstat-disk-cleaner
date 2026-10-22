@@ -46,9 +46,42 @@ namespace
     }
     std::wstring RuleScope(const Cleanup::Rule& rule)
     {
-        static const std::array suffixes{ L"\\**\\*.tmp; *.temp", L"\\Default|Profile <n>\\Cache\\Cache_Data\\**",
-            L"\\Default|Profile <n>\\Cache\\Cache_Data\\**", L"\\<profile>\\cache2\\entries\\**", L"\\**" };
-        return rule.relativeRoot + suffixes[static_cast<size_t>(rule.category)];
+        if (rule.category == Cleanup::Category::Temporary) return rule.relativeRoot + L"\\**\\*.tmp; *.temp";
+        switch (rule.layout)
+        {
+        case Cleanup::Layout::ChromiumProfiles: return rule.relativeRoot + L"\\Default|Profile <n>\\Cache\\Cache_Data\\**";
+        case Cleanup::Layout::FirefoxProfiles: return rule.relativeRoot + L"\\<profile>\\cache2\\entries\\**";
+        case Cleanup::Layout::CommitDirectories: return rule.relativeRoot + L"\\<40 hex commit>\\**";
+        default: return rule.relativeRoot + L"\\**";
+        }
+    }
+    std::wstring RiskName(const Cleanup::Risk risk, const Cleanup::Assessment assessment)
+    {
+        const auto level = risk == Cleanup::Risk::Low ? IDS_CP_LOW : risk == Cleanup::Risk::High ? IDS_CP_HIGH : IDS_CP_MEDIUM;
+        return Localization::Lookup(level) + L" | " + Localization::Lookup(assessment == Cleanup::Assessment::RegenerableCache ?
+            IDS_CP_ASSESS_REGENERABLE : IDS_CP_ASSESS_MANUAL);
+    }
+    std::wstring ProtectedScope(const Cleanup::Category category)
+    {
+        switch (category)
+        {
+        case Cleanup::Category::Temporary: return Localization::Lookup(IDS_CP_PROTECTED_TEMP);
+        case Cleanup::Category::VSCode: return Localization::Lookup(IDS_CP_PROTECTED_VSCODE);
+        case Cleanup::Category::Npm: return Localization::Lookup(IDS_CP_PROTECTED_NPM);
+        case Cleanup::Category::NuGet: return Localization::Lookup(IDS_CP_PROTECTED_NUGET);
+        case Cleanup::Category::Pip: return Localization::Lookup(IDS_CP_PROTECTED_PIP);
+        default: return Localization::Lookup(IDS_CP_PROTECTED_BROWSER);
+        }
+    }
+    std::wstring ExclusionLines(const std::vector<std::wstring>& directories)
+    {
+        std::wstring text;
+        for (const auto& directory : directories)
+        {
+            if (!text.empty()) text += L"\r\n";
+            text += directory;
+        }
+        return text;
     }
 }
 
@@ -59,7 +92,8 @@ CCleanupPreviewDlg::~CCleanupPreviewDlg()
 }
 std::wstring CCleanupPreviewDlg::CategoryName(const Cleanup::Category category)
 {
-    static constexpr std::array names{ IDS_CP_TEMP, IDS_CP_CHROME, IDS_CP_EDGE, IDS_CP_FIREFOX, IDS_CP_PIP };
+    static constexpr std::array names{ IDS_CP_TEMP, IDS_CP_CHROME, IDS_CP_EDGE, IDS_CP_FIREFOX, IDS_CP_PIP,
+        IDS_CP_BRAVE, IDS_CP_VIVALDI, IDS_CP_VSCODE, IDS_CP_NPM, IDS_CP_NUGET };
     return Localization::Lookup(names[static_cast<size_t>(category)]);
 }
 
@@ -78,10 +112,12 @@ bool CCleanupPreviewDlg::ResolveOptions()
             SetText(IDC_CP_ISSUES, Localization::Lookup(IDS_CP_FIXTURE_ERROR));
             return false;
         }
+        m_options.roamingAppData = m_options.localAppData.substr(0, m_options.localAppData.find_last_of(L'\\')) + L"\\RoamingAppData";
         m_fixture = true;
         return true;
     }
     m_options.localAppData = KnownFolder(FOLDERID_LocalAppData);
+    m_options.roamingAppData = KnownFolder(FOLDERID_RoamingAppData);
     if (m_options.localAppData.empty()) return false;
     for (const auto* id : { &FOLDERID_Windows, &FOLDERID_ProgramFiles, &FOLDERID_ProgramFilesX86,
         &FOLDERID_ProgramData, &FOLDERID_Desktop, &FOLDERID_Documents, &FOLDERID_Downloads,
@@ -89,6 +125,58 @@ bool CCleanupPreviewDlg::ResolveOptions()
     {
         if (auto path = KnownFolder(*id); !path.empty()) m_options.protectedDirectories.push_back(std::move(path));
     }
+    return true;
+}
+
+std::wstring CCleanupPreviewDlg::RuleDetails(const Cleanup::Rule& rule) const
+{
+    const auto& anchor = rule.anchor == Cleanup::Anchor::LocalAppData ? m_options.localAppData : m_options.roamingAppData;
+    return anchor + L"\\" + RuleScope(rule) + L"\r\n" +
+        Localization::Format(IDS_CP_RULE_DETAILS, rule.id, rule.version, RuleScope(rule), rule.minimumAgeDays) +
+        L"\r\n" + Localization::Lookup(rule.reasonKey) + L"\r\n" + RiskName(rule.risk, rule.assessment) +
+        L"\r\n" + ProtectedScope(rule.category);
+}
+
+void CCleanupPreviewDlg::LoadExclusions()
+{
+    std::vector<std::wstring> directories;
+    std::wstring error;
+    m_exclusionsCorrupt = !Cleanup::DecodeExclusions(COptions::CleanupPreviewExclusions.Obj(), directories, error);
+    m_internalChange = true;
+    m_savedExclusionsText = ExclusionLines(directories);
+    m_exclusions.SetText(m_exclusionsCorrupt ? Localization::Lookup(IDS_CP_EXCLUSIONS_CORRUPT) : m_savedExclusionsText);
+    m_internalChange = false;
+    if (m_exclusionsCorrupt) SetText(IDC_CP_ISSUES, Localization::Lookup(IDS_CP_EXCLUSIONS_CORRUPT));
+}
+
+bool CCleanupPreviewDlg::SaveExclusions()
+{
+    const auto text = m_exclusions.GetText();
+    if (!m_exclusionsCorrupt && text == m_savedExclusionsText) return true;
+    std::vector<std::wstring> directories;
+    std::wstring error;
+    if (!Cleanup::ParseExclusions(text, directories, error))
+    {
+        SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_EXCLUSIONS_INVALID));
+        SetText(IDC_CP_ISSUES, text + L"\r\n" + Localization::Lookup(IDS_CP_EXCLUSIONS_INVALID));
+        return false;
+    }
+    const auto encoded = Cleanup::EncodeExclusions(directories);
+    const std::wstring previous = COptions::CleanupPreviewExclusions.Obj();
+    COptions::CleanupPreviewExclusions = encoded;
+    COptions::CleanupPreviewExclusions.WritePersistedProperty();
+    COptions::CleanupPreviewExclusions = std::wstring(L"unreadable-exclusion-setting");
+    COptions::CleanupPreviewExclusions.ReadPersistedProperty();
+    if (COptions::CleanupPreviewExclusions.Obj() != encoded)
+    {
+        COptions::CleanupPreviewExclusions = previous;
+        SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_EXCLUSIONS_SAVE_FAILED));
+        SetText(IDC_CP_ISSUES, Localization::Lookup(IDS_CP_EXCLUSIONS_SAVE_FAILED));
+        return false;
+    }
+    m_savedExclusionsText = text;
+    m_exclusionsCorrupt = false;
+    SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_EXCLUSIONS_SAVED));
     return true;
 }
 
@@ -118,7 +206,8 @@ bool CCleanupPreviewDlg::OnInitDialog()
         Check(m_categories, static_cast<int>(i), true);
         Cell(m_categories, static_cast<int>(i), 1, L"0");
         Cell(m_categories, static_cast<int>(i), 2, FormatBytes(0));
-        Cell(m_categories, static_cast<int>(i), 3, Localization::Lookup(IDS_CP_MEDIUM));
+        const auto primary = std::ranges::find(Cleanup::Rules(), static_cast<Cleanup::Category>(i), &Cleanup::Rule::category);
+        Cell(m_categories, static_cast<int>(i), 3, RiskName(primary->risk, primary->assessment));
         Cell(m_categories, static_cast<int>(i), 4, CoverageName(Cleanup::CoverageState::NotScanned));
     }
     m_internalChange = false;
@@ -165,7 +254,9 @@ bool CCleanupPreviewDlg::OnInitDialog()
     }
     m_optionsValid = ResolveOptions();
     if (m_fixture) SetText(IDC_CP_NOTICE, Localization::Lookup(IDS_CP_FIXTURE_NOTICE));
-    SetText(IDC_CP_STATUS, Localization::Lookup(m_optionsValid ? IDS_CP_READY : IDS_CP_UNAVAILABLE));
+    LoadExclusions();
+    SetText(IDC_CP_STATUS, Localization::Lookup(!m_optionsValid ? IDS_CP_UNAVAILABLE :
+        m_exclusionsCorrupt ? IDS_CP_EXCLUSIONS_CORRUPT : IDS_CP_READY));
     SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_SELECT_HINT));
     SetScanning(false);
     UpdateSummary();
@@ -336,7 +427,7 @@ void CCleanupPreviewDlg::FillFiles()
         Cell(m_files, row, 2, FormatBytes(candidate.allocatedBytes));
         Cell(m_files, row, 3, candidate.ruleId + L" / v" + std::to_wstring(candidate.ruleVersion));
         Cell(m_files, row, 4, Localization::Lookup(candidate.reasonKey));
-        Cell(m_files, row, 5, Localization::Lookup(IDS_CP_MEDIUM));
+        Cell(m_files, row, 5, RiskName(candidate.risk, candidate.assessment));
         if (index == focus) m_files.SetItemState(row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
     }
     if (std::ranges::find(m_visible, focus) == m_visible.end()) SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_SELECT_HINT));
@@ -398,7 +489,12 @@ void CCleanupPreviewDlg::InvalidatePreview()
     SetScanning(false);
     UpdateSummary();
 }
-void CCleanupPreviewDlg::OnConfigurationChanged() { InvalidatePreview(); }
+void CCleanupPreviewDlg::OnConfigurationChanged()
+{
+    if (m_internalChange || m_scanning) return;
+    InvalidatePreview();
+    if (m_optionsValid) SaveExclusions();
+}
 void CCleanupPreviewDlg::OnCategoryChanged(NMHDR* header, LRESULT* result)
 {
     *result = 0;
@@ -407,10 +503,10 @@ void CCleanupPreviewDlg::OnCategoryChanged(NMHDR* header, LRESULT* result)
     else if (!m_scanning && !m_internalChange && change->iItem >= 0 && (change->uNewState & LVIS_SELECTED))
     {
         const auto index = static_cast<size_t>(change->iItem);
-        const auto& rule = Cleanup::Rules()[index];
-        SetText(IDC_CP_DETAILS, m_options.localAppData + L"\\" + RuleScope(rule) + L"\r\n" +
-            Localization::Format(IDS_CP_RULE_DETAILS, rule.id, rule.version, RuleScope(rule), rule.minimumAgeDays) +
-            L" | " + CoverageName(m_result.coverage[index].state));
+        std::wstring details = CoverageName(m_result.coverage[index].state);
+        for (const auto& rule : Cleanup::Rules()) if (static_cast<size_t>(rule.category) == index)
+            details += L"\r\n" + RuleDetails(rule);
+        SetText(IDC_CP_DETAILS, details);
     }
 }
 
@@ -422,26 +518,14 @@ void CCleanupPreviewDlg::OnScan()
     bool enabled = false;
     for (size_t i = 0; i < options.enabled.size(); ++i) enabled |= options.enabled[i] = IsRowChecked(m_categories, static_cast<int>(i));
     if (!enabled) { SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_CHOOSE)); return; }
-    const auto exclusions = m_exclusions.GetText();
-    for (size_t start = 0; start < exclusions.size();)
+    std::wstring error;
+    if (!Cleanup::ParseExclusions(m_exclusions.GetText(), options.excludedDirectories, error))
     {
-        const size_t end = exclusions.find(L'\n', start);
-        std::wstring line = exclusions.substr(start, end == std::wstring::npos ? end : end - start);
-        if (!line.empty() && line.back() == L'\r') line.pop_back();
-        if (!line.empty())
-        {
-            std::wstring normalized, error;
-            if (!Cleanup::NormalizeDirectory(line, normalized, error))
-            {
-                SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_INVALID_EXCLUSION));
-                SetText(IDC_CP_ISSUES, line + L"\r\n" + Localization::Lookup(IDS_CP_INVALID_EXCLUSION));
-                return;
-            }
-            options.excludedDirectories.push_back(std::move(normalized));
-        }
-        if (end == std::wstring::npos) break;
-        start = end + 1;
+        SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_INVALID_EXCLUSION));
+        SetText(IDC_CP_ISSUES, Localization::Lookup(IDS_CP_EXCLUSIONS_INVALID));
+        return;
     }
+    if (!SaveExclusions()) return;
     InvalidatePreview();
     m_started = GetTickCount64();
     m_finished = false;
@@ -486,6 +570,7 @@ void CCleanupPreviewDlg::OnCancel()
         OnStop();
         return;
     }
+    if (m_optionsValid) SaveExclusions();
     ::KillTimer(Handle(), CleanupTimer);
     CLayoutDialog::OnCancel();
 }
@@ -582,10 +667,10 @@ void CCleanupPreviewDlg::OnFileChanged(NMHDR* header, LRESULT* result)
     if (row >= 0 && static_cast<size_t>(row) < m_visible.size())
     {
         const auto& candidate = m_result.candidates[m_visible[row]];
-        const auto& rule = Cleanup::Rules()[static_cast<size_t>(candidate.category)];
+        const auto rule = std::ranges::find(Cleanup::Rules(), candidate.ruleId, &Cleanup::Rule::id);
         SetText(IDC_CP_DETAILS, candidate.path + L"\r\n" +
-            Localization::Format(IDS_CP_RULE_DETAILS, candidate.ruleId, candidate.ruleVersion, RuleScope(rule), rule.minimumAgeDays) +
-            L" | " + Localization::Lookup(candidate.reasonKey) + L" | " + Localization::Lookup(IDS_CP_MEDIUM));
+            (rule == Cleanup::Rules().end() ? candidate.ruleId : RuleDetails(*rule)) +
+            L"\r\n" + RiskName(candidate.risk, candidate.assessment));
     }
     if ((change->uOldState ^ change->uNewState) & LVIS_STATEIMAGEMASK)
     {
@@ -602,6 +687,6 @@ void CCleanupPreviewDlg::OnAddExclusion()
         if (!value.empty() && value.back() != L'\n') value += L"\r\n";
         m_exclusions.SetText(value + *directory);
         // Multiline WM_SETTEXT does not emit EN_CHANGE.
-        InvalidatePreview();
+        OnConfigurationChanged();
     }
 }
