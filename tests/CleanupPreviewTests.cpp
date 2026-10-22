@@ -120,6 +120,11 @@ static void RunPlanTests(const fs::path& root, std::uint64_t now, std::uint64_t 
     };
     const auto expectSkip = [&](const CleanupPlan& input, const ScanOptions& current, PlanReason reason) {
         const auto result = simulate(input, current);
+        if (result.records.size() != 1 || result.records[0].state != SimulationState::Skipped ||
+            result.records[0].reason != reason || result.estimatedReleaseUpperBound != 0)
+            std::cerr << "Skip diagnostic: expected=" << static_cast<unsigned>(reason) << " plan=" << static_cast<unsigned>(input.Reason()) <<
+                " items=" << input.Items().size() << " records=" << result.records.size() <<
+                " actual=" << (result.records.empty() ? 255 : static_cast<unsigned>(result.records[0].reason)) << std::endl;
         Check(result.records.size() == 1 && result.records[0].state == SimulationState::Skipped &&
             result.records[0].reason == reason && result.estimatedReleaseUpperBound == 0,
             "Failed safety condition skips its item with the expected reason and no release estimate");
@@ -194,9 +199,10 @@ static void RunPlanTests(const fs::path& root, std::uint64_t now, std::uint64_t 
             return record.reason == PlanReason::FileChanged; }) == 1,
         "One changed file is skipped while unchanged planned items retain independent results");
     const auto makeSingle = [&](const wchar_t* name) {
-        const auto path = temp/name; Write(path, "original payload", old);
+        const auto path = (temp/name).make_preferred(); Write(path, "original payload", old);
         auto current = Scan(options); std::vector<bool> choice(current.candidates.size(), false);
         for (size_t i = 0; i < choice.size(); ++i) choice[i] = current.candidates[i].path == path.wstring();
+        Check(std::count(choice.begin(), choice.end(), true) == 1, "Single-file plan resolves exactly one normalized synthetic candidate");
         return BuildPlan(current, choice, options, Disposition::PermanentDelete);
     };
     auto replaced = makeSingle(L"replacement.tmp");
