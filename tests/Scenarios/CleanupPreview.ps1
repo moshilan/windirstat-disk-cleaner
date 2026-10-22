@@ -301,6 +301,9 @@ function Test-CleanupPreview {
     Assert-True ($allTotals -ne $noneTotals) 'Selected counts and allocation estimates update with selection'
 
     # Exercise the native state icon as well as the keyboard and bulk commands.
+    Assert-True ([NativeListViewHelper]::FocusListView($files) -and [NativeListViewHelper]::SelectSingleItem($files, 0)) `
+        'The first candidate is brought into view before its native checkbox is clicked'
+    Assert-Equal ([TestDesktop]::Message($files, 0x1027).ToInt32()) 0 'The native checkbox target really is row zero'
     $fileRect = [TestDesktop]::Rectangle($files)
     $headerRect = [TestDesktop]::Rectangle([TestDesktop]::Message($files, 0x101F))
     [TestDesktop]::Activate($dialog)
