@@ -71,7 +71,7 @@ jobs:
         run: |
           $reportRoot = Join-Path $env:RUNNER_TEMP 'scan-policy-results'
           # Keep fixtures so the selected tests perform no deletion; the disposable runner owns cleanup.
-          pwsh -NoProfile -STA -File tests/Test-WinDirStat.ps1 -ExePath build/WinDirStat_x64.exe -Scenario scan.policy,scan.workloads,fs.empty,fs.access-denied,fs.access-denied.json,lifecycle.stop-rescan -StressFileCount 1000 -KeepArtifacts -RequireAll -OutputPath $reportRoot
+          pwsh -NoProfile -STA -File tests/Test-WinDirStat.ps1 -ExePath build/WinDirStat_x64.exe -Scenario scan.policy,scan.workloads,fs.empty,fs.access-denied,fs.access-denied.json,lifecycle.stop-suspended -KeepArtifacts -RequireAll -OutputPath $reportRoot
           $testExit = $LASTEXITCODE
           if (Test-Path (Join-Path $reportRoot 'results.json')) {
             $report = Get-Content (Join-Path $reportRoot 'results.json') -Raw | ConvertFrom-Json
