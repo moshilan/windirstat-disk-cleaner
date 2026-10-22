@@ -161,7 +161,7 @@ void CCleanupPreviewDlg::OnGetMinMaxInfo(MINMAXINFO* info)
 void CCleanupPreviewDlg::SetScanning(const bool scanning)
 {
     m_scanning = scanning;
-    for (const auto id : { IDC_CP_CATEGORIES, IDC_CP_EXCLUSIONS, IDC_CP_ADD_EXCLUSION }) GetDlgItem(id).EnableWindow(!scanning);
+    for (const auto id : { IDC_CP_CATEGORIES, IDC_CP_EXCLUSIONS, IDC_CP_ADD_EXCLUSION }) GetDlgItem(id).EnableWindow(!scanning && m_optionsValid);
     GetDlgItem(IDC_CP_SCAN).EnableWindow(!scanning && m_optionsValid);
     GetDlgItem(IDC_CP_CANCEL).EnableWindow(scanning);
     for (const auto id : { IDC_CP_FILES, IDC_CP_SELECT_ALL, IDC_CP_SELECT_NONE }) GetDlgItem(id).EnableWindow(!scanning && m_valid);
@@ -311,14 +311,15 @@ void CCleanupPreviewDlg::FillResult()
         Cell(m_categories, static_cast<int>(i), 1, FormatCount(m_result.categories[i].files));
         Cell(m_categories, static_cast<int>(i), 2, FormatBytes(m_result.categories[i].allocatedBytes));
     }
-    std::wstring issues = Localization::Lookup(IDS_CP_ESTIMATE_NOTE) + L"\r\n";
+    std::wstring issues;
+    for (const auto& warning : m_result.warnings)
+        issues += (warning.path.empty() ? L"" : warning.path + L": ") +
+            (warning.resourceKey ? Localization::Lookup(warning.message) : warning.message) + L"\r\n";
     const std::array reasons{ IDS_CP_SKIP_RECENT, IDS_CP_SKIP_PATTERN, IDS_CP_SKIP_EXCLUDED, IDS_CP_SKIP_UNSAFE,
         IDS_CP_SKIP_HARDLINK, IDS_CP_SKIP_STREAMS, IDS_CP_SKIP_METADATA, IDS_CP_SKIP_DUPLICATE };
     for (size_t i = 0; i < reasons.size(); ++i) if (m_result.skipped[i] != 0)
         issues += Localization::Lookup(reasons[i]) + L": " + FormatCount(m_result.skipped[i]) + L"\r\n";
-    for (const auto& warning : m_result.warnings)
-        issues += (warning.path.empty() ? L"" : warning.path + L": ") +
-            (warning.resourceKey ? Localization::Lookup(warning.message) : warning.message) + L"\r\n";
+    issues += Localization::Lookup(IDS_CP_ESTIMATE_NOTE);
     SetText(IDC_CP_ISSUES, issues);
     const auto state = m_result.cancelled ? IDS_CP_CANCELLED : m_result.limitReached ? IDS_CP_LIMIT :
         m_result.incomplete ? IDS_CP_INCOMPLETE : m_result.candidates.empty() ? IDS_CP_EMPTY : IDS_CP_COMPLETE;
@@ -378,5 +379,7 @@ void CCleanupPreviewDlg::OnAddExclusion()
         auto value = m_exclusions.GetText();
         if (!value.empty() && value.back() != L'\n') value += L"\r\n";
         m_exclusions.SetText(value + *directory);
+        // Multiline WM_SETTEXT does not emit EN_CHANGE.
+        InvalidatePreview();
     }
 }

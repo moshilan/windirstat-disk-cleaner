@@ -1,4 +1,4 @@
-function New-CleanupFixtureFile {
+﻿function New-CleanupFixtureFile {
     param([string] $Path, [int] $Size = 4097, [switch] $Recent)
     New-TestFile $Path $Size | Out-Null
     $time = if ($Recent) { [datetime]::UtcNow } else { [datetime]::UtcNow.AddDays(-10) }
@@ -22,6 +22,15 @@ function Wait-CleanupPreviewIdle {
     Wait-Until {
         [TestDesktop]::IsWindowEnabled($scan) -and -not [TestDesktop]::IsWindowEnabled($cancel)
     } 'The cleanup worker and preview updates settle' -StableMilliseconds 350 | Out-Null
+}
+
+function Set-CleanupExclusions {
+    param([IntPtr] $Dialog, [string] $Value)
+    $edit = Get-DialogControl $Dialog 'IDC_CP_EXCLUSIONS'
+    [TestDesktop]::SetText($edit, $Value)
+    # Simulate user editing: multiline WM_SETTEXT itself does not send EN_CHANGE.
+    [void] [TestDesktop]::Message($Dialog, 0x0111,
+        ((0x0300 -shl 16) -bor (Get-ResourceId 'IDC_CP_EXCLUSIONS')), $edit.ToInt64())
 }
 
 function Test-CleanupPreview {
@@ -104,7 +113,7 @@ function Test-CleanupPreview {
     Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root 'cleanup-preview.png')
 
     $excluded = Join-Path $local 'Temp\excluded'
-    [TestDesktop]::SetText((Get-DialogControl $dialog 'IDC_CP_EXCLUSIONS'), $excluded)
+    Set-CleanupExclusions $dialog $excluded
     Wait-Until { [NativeListViewHelper]::GetItemCount($files) -eq 0 } 'Changing exclusions invalidates the old preview and selection' | Out-Null
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Wait-CleanupPreviewIdle $dialog
@@ -115,17 +124,17 @@ function Test-CleanupPreview {
     Assert-True ((Join-Path $local 'Temp\excluded\item.tmp') -notin $afterExclusion) 'The excluded file is absent'
     Assert-Sequence @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash | ForEach-Object Hash) `
         @($before.Hash) 'Repeated previews and selections leave every source payload unchanged'
-    [TestDesktop]::SetText((Get-DialogControl $dialog 'IDC_CP_EXCLUSIONS'), 'relative-directory')
+    Set-CleanupExclusions $dialog 'relative-directory'
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_STATUS')) -match 'absolute|绝对') `
         'An invalid exclusion is explained without starting a scan'
-    [TestDesktop]::SetText((Get-DialogControl $dialog 'IDC_CP_EXCLUSIONS'), $local)
+    Set-CleanupExclusions $dialog $local
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Wait-CleanupPreviewIdle $dialog
     Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 0 'Excluding the entire anchor produces an explicit empty preview'
     Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_STATUS')) -match 'no candidates|未发现') `
         'A genuinely empty preview is distinct from cancellation and failure'
-    [TestDesktop]::SetText((Get-DialogControl $dialog 'IDC_CP_EXCLUSIONS'), $excluded)
+    Set-CleanupExclusions $dialog $excluded
 
     # ACL changes are confined to this new synthetic directory and always restored.
     $blocked = Join-Path $local 'Temp\blocked'
@@ -144,6 +153,7 @@ function Test-CleanupPreview {
     Wait-CleanupPreviewIdle $dialog
     $issues = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_ISSUES'))
     Assert-True ($issues.Contains($blocked)) 'An unreadable location is explained with its path'
+    Assert-True ($issues.StartsWith($blocked)) 'Actual failure details appear before general estimate notes'
     $state = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_STATUS'))
     Assert-True ($state -match 'incomplete|不完整') 'Read failures do not report a complete preview'
     Set-Acl -LiteralPath $blocked -AclObject $acl
@@ -177,6 +187,8 @@ function Test-CleanupPreview {
     $invalidDialog = Wait-Until { Get-AppDialog $invalidApp 'IDC_CP_SCAN' } 'Invalid fixture is handled within the preview'
     Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $invalidDialog 'IDC_CP_SCAN'))) `
         'Invalid synthetic override disables scanning instead of falling back to real user caches'
+    Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $invalidDialog 'IDC_CP_EXCLUSIONS'))) `
+        'Unavailable roots keep configuration disabled and preserve the failure explanation'
     Assert-Equal ([NativeListViewHelper]::GetItemCount((Get-DialogControl $invalidDialog 'IDC_CP_FILES'))) 0 `
         'An invalid override never creates candidates'
     Close-AppDialog $invalidDialog

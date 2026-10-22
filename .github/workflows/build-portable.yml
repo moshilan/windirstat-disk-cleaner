@@ -86,7 +86,7 @@ jobs:
             $report.Results | Select-Object Id,Status,Checks,Seconds,Notes |
               ConvertTo-Json -Depth 8 | Set-Content artifacts/records/scan-policy.json -Encoding utf8
             # Only synthetic runner UI is copied; never upload raw reports or local screenshots.
-            foreach ($case in $report.Results | Where-Object { $_.Id -in @('cleanup.preview', 'cleanup.preview.zh') -and $_.Status -eq 'PASS' }) {
+            foreach ($case in $report.Results | Where-Object { $_.Id -in @('cleanup.preview', 'cleanup.preview.zh') }) {
               $screenshot = Join-Path $case.Artifacts 'cleanup-preview.png'
               if (Test-Path -LiteralPath $screenshot) {
                 Copy-Item -LiteralPath $screenshot -Destination (Join-Path artifacts/records ($case.Id + '.png'))
