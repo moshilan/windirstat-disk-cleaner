@@ -63,8 +63,9 @@ namespace Cleanup
             return a.logicalBytes == b.logicalBytes && a.allocatedBytes == b.allocatedBytes &&
                 a.lastWriteTime == b.lastWriteTime && a.creationTime == b.creationTime;
         }
-        // A short lived metadata handle refuses concurrent writers/deleters. It grants no write
-        // access and is never passed to any disposition API. This is not a future execution lock.
+        // A short lived read handle refuses concurrent writers/deleters. Attribute-only opens
+        // bypass sharing checks, so request read access but never read payload bytes. This grants
+        // no write access and is not a future execution lock or a disposition handle.
         PlanReason ReadSnapshot(const Candidate& expected, std::uint64_t& changeTime, std::uint32_t& error)
         {
             std::wstring path, diagnostic;
@@ -77,7 +78,7 @@ namespace Cleanup
                 if (attributes == INVALID_FILE_ATTRIBUTES) { error = GetLastError(); return PlanReason::Unavailable; }
                 return PlanReason::UnsafePath;
             }
-            const HANDLE file = CreateFileW((L"\\\\?\\" + path).c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+            const HANDLE file = CreateFileW((L"\\\\?\\" + path).c_str(), GENERIC_READ, FILE_SHARE_READ,
                 nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
             if (file == INVALID_HANDLE_VALUE) { error = GetLastError(); return PlanReason::Unavailable; }
             FILE_STANDARD_INFO standard{};
