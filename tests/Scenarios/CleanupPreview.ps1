@@ -61,10 +61,16 @@ function Move-CleanupDivider {
     $y = [int](($upper[3] + $gapEnd[1]) / 2) - $originY
     $point = ($y -shl 16) -bor ($x -band 0xFFFF)
     [TestDesktop]::Activate($Dialog)
+    # Native capture also delivers real cursor moves. Keep the cursor and the
+    # injected button coordinates together instead of racing two positions.
+    [TestDesktop]::MoveCursor($originX + $x, $originY + $y)
+    Start-Sleep -Milliseconds 100
     [void] [TestDesktop]::Message($Dialog, 0x0201, 1, $point)
     Assert-Equal ([TestDesktop]::CaptureOwner($Dialog)) $Dialog 'A preview divider acquires mouse capture'
     $point = (($y + $Offset) -shl 16) -bor ($x -band 0xFFFF)
-    [void] [TestDesktop]::Message($Dialog, 0x0200, 1, $point)
+    [TestDesktop]::MoveCursor($originX + $x, $originY + $y + $Offset)
+    Wait-Until { ([TestDesktop]::Rectangle($Above)[3] - $upper[3]) -eq $Offset } `
+        'The captured native cursor move settles at the requested divider position' -StableMilliseconds 150 | Out-Null
     [void] [TestDesktop]::Message($Dialog, 0x0202, 0, $point)
     $movedUpper = [TestDesktop]::Rectangle($Above)
     $movedLower = [TestDesktop]::Rectangle($Below)
