@@ -422,6 +422,7 @@ function Test-DeniedDirectory {
             Assert-True ((Get-ScanOutcomeStatus $ui).Contains($expected)) 'The status distinguishes ended from complete'
             Assert-True ($summary.Contains($(if ($language -eq 9) { 'lower than actual usage' } else { '低于实际占用' }))) `
                 'The explanation warns that unread data can understate totals'
+            [TestDesktop]::Activate($dialog)
             Close-AppDialog $dialog -Button (Get-ResourceId 'IDC_MESSAGE_BUTTONRIGHT')
             Wait-AppIdle $ui
             Assert-True (-not (Get-AppCommandState $ui 'ID_SCAN_STOP').Enabled) `
@@ -493,7 +494,7 @@ Register-Scenario fs.symlinks Filesystem 'File and directory symlinks share targ
 Register-Scenario fs.access-denied Filesystem 'Access-denied enumeration preserves visible siblings' `
     Test-DeniedDirectory -Tags Filesystem -Requires Windows,Ntfs,NativeLists -Data @{ Format = 'csv' }
 Register-Scenario fs.access-denied.json Filesystem 'Local failure diagnostics survive JSON reload and scoped recovery' `
-    Test-DeniedDirectory -Tags Filesystem -Requires Windows,Ntfs,NativeLists -Data @{ Format = 'json' }
+    Test-DeniedDirectory -Tags Filesystem,Desktop -Requires Windows,Ntfs,NativeLists,Desktop -Data @{ Format = 'json' }
 Register-Scenario fs.empty Filesystem 'Empty roots, empty ancestry, and zero-byte files retain known sizes' `
     Test-EmptyScan -Tags Filesystem
 Register-Scenario fs.large-sizes Filesystem 'Sparse files and recursive totals cross 32-bit size boundaries' `

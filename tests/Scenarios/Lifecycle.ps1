@@ -148,11 +148,15 @@ function Test-StopAndRescan {
     $new = New-TestFile (Join-Path $root 'after-stop.txt') 853
     Invoke-AppCommand $app 'ID_REFRESH_ALL'
     Wait-AppIdle $app
+    Assert-True ((Get-ScanOutcomeStatus $app).Contains('Analysis complete')) `
+        'A successful rescan replaces the cancelled status'
     $rows = Save-AppReport $app 'rescanned'
     Assert-Equal @(Get-ReportFiles $rows).Count ($StressFileCount + 1) `
         'Rescanning replaces partial data without duplicate rows'
     Assert-Equal @($rows | Where-Object Name -IEQ $new).Count 1 'The new scan observes the external sentinel'
-    Assert-GraphRendered $app | Out-Null
+    Assert-Equal ([long]$rows[0].'Logical Size') ([long]$StressFileCount * 65536 + 853) `
+        'A complete rescan retains exact logical byte totals'
+    if (-not $Case.ContainsKey('StatusOnly')) { Assert-GraphRendered $app | Out-Null }
 }
 
 function Test-ScanResizeOverlap {
@@ -269,6 +273,9 @@ foreach ($mode in @(@{ Suffix = ''; Threads = 1 }, @{ Suffix = '.parallel'; Thre
 }
 Register-Scenario lifecycle.stop-suspended Lifecycle 'Cancellation of suspended workers permits a clean rescan' `
     Test-StopAndRescan -Tags Desktop,Race -Requires Windows,Desktop -Data @{ Threads = 8; Suspended = $true }
+Register-Scenario scan.outcome.cancelled ScanOutcome 'Stopped status and exact totals after a fresh rescan' `
+    Test-StopAndRescan -Tags Desktop,Race -Requires Windows,Desktop `
+    -Data @{ Threads = 8; Suspended = $true; StatusOnly = $true }
 Register-Scenario lifecycle.resize-overlap Lifecycle `
     'Live resize and scan suspension overlap without stranding rendering' `
     Test-ScanResizeOverlap -Tags Desktop,Race,Rendering -Requires Windows,Desktop
