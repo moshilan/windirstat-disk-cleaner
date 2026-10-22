@@ -79,6 +79,26 @@ static void Junction(const fs::path& link, const fs::path& target)
     if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
     Check(ok, "Synthetic junction can be created");
 }
+static void CheckPlanRecords(const Cleanup::CleanupPlan& plan, const Cleanup::SimulationResult& result)
+{
+    using namespace Cleanup;
+    Check(result.simulationOnly && result.actualReleasedBytes == 0 && result.planId == plan.Id() &&
+        result.records.size() == plan.Items().size(), "Every immutable planned item has one simulation-only result");
+    std::uint64_t total = 0;
+    for (size_t i = 0; i < result.records.size(); ++i) {
+        const auto& record = result.records[i];
+        const auto& item = plan.Items()[i];
+        const bool passed = record.state == SimulationState::Simulated;
+        Check(record.itemIndex == i && (passed == (record.reason == PlanReason::None)) &&
+            (!passed || record.systemError == 0), "Per-item indexes, state, reason and error agree");
+        Check(record.state != SimulationState::Cancelled ||
+            (record.reason == PlanReason::Cancelled && record.systemError == 0), "Cancellation carries no stale file error");
+        Check(record.estimatedReleaseUpperBound == (passed && item.disposition == Disposition::PermanentDelete ?
+            item.candidate.allocatedBytes : 0), "Only passed permanent intent contributes an allocation upper bound");
+        total += record.estimatedReleaseUpperBound;
+    }
+    Check(total == result.estimatedReleaseUpperBound, "Summary upper bound equals the sum of item results");
+}
 static void RunPlanTests(const fs::path& root, std::uint64_t now, std::uint64_t old)
 {
     using namespace Cleanup;
@@ -109,6 +129,7 @@ static void RunPlanTests(const fs::path& root, std::uint64_t now, std::uint64_t 
     const auto simulate = [&](const CleanupPlan& input, const ScanOptions& current, std::stop_token stop = {}) {
         const auto before = Snapshot(fixture);
         auto result = SimulatePlan(input, current, stop);
+        CheckPlanRecords(input, result);
         Check(Snapshot(fixture) == before, "Simulation preserves every synthetic path and default-stream byte");
         Check(result.simulationOnly && result.actualReleasedBytes == 0 && result.planId == input.Id() &&
             result.finishedAt >= result.startedAt && result.records.size() == input.Items().size(),
@@ -248,6 +269,131 @@ static void RunPlanTests(const fs::path& root, std::uint64_t now, std::uint64_t 
     Check(Snapshot(outside).at((outside/L"payload.tmp").wstring()) == "protected sentinel" &&
         Snapshot(preservedDirectory).at((preservedDirectory/L"payload.tmp").wstring()) == "planned original",
         "Ancestor redirection never changes the outside sentinel or the retained original");
+}
+static void RunPlanGuardTests(const fs::path& root, std::uint64_t now, std::uint64_t old)
+{
+    using namespace Cleanup;
+    const auto fixture = root/L"PlanGuards", local = fixture/L"LocalAppData", temp = local/L"Temp";
+    for (const auto* name : { L"a", L"b", L"c" }) Write(temp/name/L"payload.tmp", std::string(8193, 'x'), old);
+    ScanOptions options; options.localAppData = local.wstring(); options.now = now;
+    options.enabled.fill(false); options.enabled[0] = true;
+    const auto build = [&]() {
+        const auto scanned = Scan(options);
+        Check(!scanned.incomplete && scanned.candidates.size() == 3, "Guard fixture has three complete eligible candidates");
+        return BuildPlan(scanned, std::vector<bool>(3, true), options, Disposition::PermanentDelete);
+    };
+    auto plan = build();
+    const auto before = Snapshot(fixture);
+    auto result = SimulatePlan(plan, options);
+    CheckPlanRecords(plan, result);
+    Check(std::all_of(result.records.begin(), result.records.end(), [](const auto& record) {
+        return record.state == SimulationState::Simulated; }), "All unchanged guard items pass metadata observation");
+
+    // The writer itself permits other readers; the verifier must still reject its write access.
+    HANDLE writer = CreateFileW(plan.Items()[1].candidate.path.c_str(), GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, 0, nullptr);
+    Check(writer != INVALID_HANDLE_VALUE, "A synthetic ordinary writer allows sharing without writing any bytes");
+    try { result = SimulatePlan(plan, options); } catch (...) { CloseHandle(writer); throw; }
+    CloseHandle(writer);
+    CheckPlanRecords(plan, result);
+    Check(result.records[1].state == SimulationState::Skipped && result.records[1].reason == PlanReason::Unavailable &&
+        result.records[1].systemError == ERROR_SHARING_VIOLATION &&
+        result.records[0].state == SimulationState::Simulated && result.records[2].state == SimulationState::Simulated,
+        "A shared writer causes one explicit sharing skip while independent items continue");
+
+    // Save and restore only the new synthetic file's DACL, including its inheritance state.
+    const auto deniedPath = plan.Items()[1].candidate.path;
+    DWORD securitySize = 0;
+    GetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION, nullptr, 0, &securitySize);
+    std::vector<BYTE> security(securitySize);
+    Check(securitySize != 0 && GetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION,
+        security.data(), securitySize, &securitySize), "Synthetic file DACL saved before changing read permission");
+    SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision = 0;
+    Check(GetSecurityDescriptorControl(security.data(), &control, &revision) != 0, "Synthetic DACL inheritance captured");
+    PSECURITY_DESCRIPTOR denied = nullptr;
+    Check(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(D;;0x1;;;WD)(A;;FA;;;WD)",
+        SDDL_REVISION_1, &denied, nullptr) != 0, "Synthetic deny-read descriptor prepared");
+    const bool applied = SetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, denied) != 0;
+    LocalFree(denied);
+    Check(applied, "Read access revoked only on the synthetic file after planning");
+    const auto restore = [&]() { return SetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION |
+        ((control & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION), security.data()) != 0; };
+    try { result = SimulatePlan(plan, options); } catch (...) { restore(); throw; }
+    Check(restore(), "Synthetic read permission and inheritance restored without elevation");
+    CheckPlanRecords(plan, result);
+    Check(result.records[1].state == SimulationState::Skipped && result.records[1].reason == PlanReason::Unavailable &&
+        result.records[1].systemError == ERROR_ACCESS_DENIED && result.records[0].state == SimulationState::Simulated &&
+        result.records[2].state == SimulationState::Simulated, "Revoked read permission yields access denied and partial results");
+    Check(Snapshot(fixture) == before, "Shared-writer and ACL tests preserve every synthetic payload");
+
+    plan = build();
+    std::stop_source stop;
+    size_t notifications = 0;
+    result = SimulatePlan(plan, options, stop.get_token(), [&](const OperationRecord& record) {
+        ++notifications; if (record.itemIndex == 0) stop.request_stop();
+    });
+    CheckPlanRecords(plan, result);
+    Check(notifications == 3 && result.records[0].state == SimulationState::Simulated &&
+        result.records[1].state == SimulationState::Cancelled && result.records[2].state == SimulationState::Cancelled,
+        "Cancellation after the first result prevents later observations and retains all result rows");
+    const auto scanned = Scan(options);
+    const auto cancelledPlan = BuildPlan(scanned, std::vector<bool>(3, true), options, Disposition::PermanentDelete, stop.get_token());
+    result = SimulatePlan(cancelledPlan, options);
+    CheckPlanRecords(cancelledPlan, result);
+    Check(std::all_of(result.records.begin(), result.records.end(), [](const auto& record) {
+        return record.state == SimulationState::Cancelled; }), "A cancelled plan stays cancelled even with a fresh token");
+    auto excluded = options; excluded.excludedDirectories = { fs::path(plan.Items()[1].candidate.path).parent_path().wstring() };
+    result = SimulatePlan(plan, excluded);
+    CheckPlanRecords(plan, result);
+    Check(std::all_of(result.records.begin(), result.records.end(), [](const auto& record) {
+        return record.reason == PlanReason::ConfigurationChanged; }), "An exclusion change invalidates the complete old plan");
+    auto changing = options;
+    result = SimulatePlan(plan, changing, {}, [&](const OperationRecord& record) {
+        if (record.itemIndex == 0) changing.excludedDirectories = excluded.excludedDirectories;
+        if (record.itemIndex == 1) changing.excludedDirectories.clear();
+    });
+    CheckPlanRecords(plan, result);
+    Check(result.records[0].state == SimulationState::Simulated &&
+        result.records[1].reason == PlanReason::ConfigurationChanged && result.records[2].reason == PlanReason::ConfigurationChanged,
+        "An exclusion change during simulation stops all remaining items even if reverted later");
+
+    // Deterministic changes after the fresh eligibility scan, before the next item is checked.
+    auto expected = Snapshot(fixture);
+    result = SimulatePlan(plan, options, {}, [&](const OperationRecord& record) {
+        if (record.itemIndex != 0) return;
+        const fs::path path = plan.Items()[1].candidate.path;
+        fs::rename(path, path.wstring() + L".kept");
+        Write(path, std::string(8193, 'y'), old);
+        expected = Snapshot(fixture);
+    });
+    CheckPlanRecords(plan, result);
+    Check(result.records[1].reason == PlanReason::IdentityChanged &&
+        result.records[0].state == SimulationState::Simulated && result.records[2].state == SimulationState::Simulated,
+        "A same-name replacement after the eligibility scan is rejected by file identity");
+    Check(Snapshot(fixture) == expected, "Simulation preserves both the retained original and the replacement");
+
+    plan = build();
+    result = SimulatePlan(plan, options, {}, [&](const OperationRecord& record) {
+        if (record.itemIndex == 0) Age(plan.Items()[1].candidate.path, old, old - 10000000);
+    });
+    CheckPlanRecords(plan, result);
+    Check(result.records[1].reason == PlanReason::FileChanged,
+        "A metadata-only change after eligibility is rejected even though the file is still old enough");
+
+    plan = build();
+    const auto redirectedPath = fs::path(plan.Items()[1].candidate.path).parent_path();
+    const auto retained = fs::path(redirectedPath.wstring() + L"-kept"), outside = fixture/L"outside";
+    Write(outside/L"payload.tmp", "outside synthetic sentinel", old);
+    result = SimulatePlan(plan, options, {}, [&](const OperationRecord& record) {
+        if (record.itemIndex != 0) return;
+        fs::rename(redirectedPath, retained); Junction(redirectedPath, outside);
+        expected = Snapshot(fixture);
+    });
+    CheckPlanRecords(plan, result);
+    Check(result.records[1].reason == PlanReason::UnsafePath &&
+        result.records[0].state == SimulationState::Simulated && result.records[2].state == SimulationState::Simulated,
+        "An ancestor junction substituted after eligibility is skipped without touching its target");
+    Check(Snapshot(fixture) == expected, "Redirection checks preserve the sentinel and retained directory contents");
 }
 int wmain(int argc, wchar_t** argv)
 {
@@ -493,6 +639,7 @@ int wmain(int argc, wchar_t** argv)
             "A roaming ancestor junction never redirects cache recognition or disables independent local results");
         Check(Snapshot(outside).size() == 1, "Outside sentinel remains intact");
         RunPlanTests(root, now, old);
+        RunPlanGuardTests(root, now, old);
         std::cout << "{\"status\":\"PASS\",\"checks\":" << checks << "}" << std::endl;
         return 0;
     } catch (const std::exception& error) {

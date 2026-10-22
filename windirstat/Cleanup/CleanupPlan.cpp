@@ -63,9 +63,29 @@ namespace Cleanup
             return a.logicalBytes == b.logicalBytes && a.allocatedBytes == b.allocatedBytes &&
                 a.lastWriteTime == b.lastWriteTime && a.creationTime == b.creationTime;
         }
-        // A short lived read handle refuses concurrent writers/deleters. Attribute-only opens
-        // bypass sharing checks, so request read access but never read payload bytes. This grants
-        // no write access and is not a future execution lock or a disposition handle.
+        struct ReadHandle
+        {
+            HANDLE value;
+            explicit ReadHandle(const HANDLE handle) : value(handle) {}
+            ~ReadHandle() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+            ReadHandle(const ReadHandle&) = delete;
+            ReadHandle& operator=(const ReadHandle&) = delete;
+        };
+        bool ReadFinalPath(const HANDLE file, std::wstring& path)
+        {
+            const DWORD length = GetFinalPathNameByHandleW(file, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+            if (length == 0) return false;
+            path.assign(length, L'\0');
+            const DWORD copied = GetFinalPathNameByHandleW(file, path.data(), length, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+            if (copied == 0) return false;
+            if (copied >= length) { SetLastError(ERROR_INSUFFICIENT_BUFFER); return false; }
+            path.resize(copied);
+            if (path.starts_with(L"\\\\?\\")) path.erase(0, 4);
+            return true;
+        }
+        // The read handle rejects ordinary data writers/deleters until this observation returns.
+        // Attribute-only handles and existing writable mappings remain outside that guarantee.
+        // This grants no write access and is not a future execution lock or a disposition handle.
         PlanReason ReadSnapshot(const Candidate& expected, std::uint64_t& changeTime, std::uint32_t& error)
         {
             std::wstring path, diagnostic;
@@ -78,24 +98,18 @@ namespace Cleanup
                 if (attributes == INVALID_FILE_ATTRIBUTES) { error = GetLastError(); return PlanReason::Unavailable; }
                 return PlanReason::UnsafePath;
             }
-            const HANDLE file = CreateFileW((L"\\\\?\\" + path).c_str(), GENERIC_READ, FILE_SHARE_READ,
-                nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-            if (file == INVALID_HANDLE_VALUE) { error = GetLastError(); return PlanReason::Unavailable; }
+            ReadHandle file{ CreateFileW((L"\\\\?\\" + path).c_str(), GENERIC_READ, FILE_SHARE_READ,
+                nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr) };
+            if (file.value == INVALID_HANDLE_VALUE) { error = GetLastError(); return PlanReason::Unavailable; }
             FILE_STANDARD_INFO standard{};
             FILE_BASIC_INFO basic{};
             BY_HANDLE_FILE_INFORMATION identity{};
-            const DWORD length = GetFinalPathNameByHandleW(file, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-            std::wstring final(length, L'\0');
-            const DWORD copied = length == 0 ? 0 : GetFinalPathNameByHandleW(file, final.data(), length, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-            const bool read = copied != 0 && copied < length &&
-                GetFileInformationByHandleEx(file, FileStandardInfo, &standard, sizeof(standard)) &&
-                GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic)) &&
-                GetFileInformationByHandle(file, &identity);
-            if (!read) error = GetLastError();
-            CloseHandle(file);
-            if (!read) return PlanReason::Unavailable;
-            final.resize(copied);
-            if (final.starts_with(L"\\\\?\\")) final.erase(0, 4);
+            std::wstring final;
+            if (!ReadFinalPath(file.value, final) ||
+                !GetFileInformationByHandleEx(file.value, FileStandardInfo, &standard, sizeof(standard)) ||
+                !GetFileInformationByHandleEx(file.value, FileBasicInfo, &basic, sizeof(basic)) ||
+                !GetFileInformationByHandle(file.value, &identity))
+            { error = GetLastError(); return PlanReason::Unavailable; }
             constexpr DWORD unsafe = FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_OFFLINE |
                 FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS | FILE_ATTRIBUTE_UNPINNED |
                 FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE | FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_SYSTEM;
@@ -114,6 +128,24 @@ namespace Cleanup
             current.lastWriteTime = static_cast<std::uint64_t>(basic.LastWriteTime.QuadPart);
             current.creationTime = static_cast<std::uint64_t>(basic.CreationTime.QuadPart);
             if (!SameMetadata(expected, current)) return PlanReason::FileChanged;
+            FILE_STANDARD_INFO after{};
+            FILE_BASIC_INFO afterBasic{};
+            std::wstring afterPath;
+            if (!GetFileInformationByHandleEx(file.value, FileStandardInfo, &after, sizeof(after)) ||
+                !GetFileInformationByHandleEx(file.value, FileBasicInfo, &afterBasic, sizeof(afterBasic)) ||
+                !ReadFinalPath(file.value, afterPath))
+            { error = GetLastError(); return PlanReason::Unavailable; }
+            if (!EqualPath(path, afterPath) || !HasSafeAncestors(path)) return PlanReason::UnsafePath;
+            if (after.EndOfFile.QuadPart != standard.EndOfFile.QuadPart ||
+                after.AllocationSize.QuadPart != standard.AllocationSize.QuadPart ||
+                after.NumberOfLinks != standard.NumberOfLinks || after.Directory != standard.Directory ||
+                after.DeletePending != standard.DeletePending || afterBasic.FileAttributes != basic.FileAttributes ||
+                afterBasic.CreationTime.QuadPart != basic.CreationTime.QuadPart ||
+                afterBasic.LastWriteTime.QuadPart != basic.LastWriteTime.QuadPart ||
+                afterBasic.ChangeTime.QuadPart != basic.ChangeTime.QuadPart)
+                return PlanReason::FileChanged;
+            // Access time is not a content-change signal. Both reads use the same still-open object;
+            // its identity cannot be recycled while held. Ancestors and later operations are not pinned.
             changeTime = static_cast<std::uint64_t>(basic.ChangeTime.QuadPart);
             return PlanReason::None;
         }
@@ -150,7 +182,8 @@ namespace Cleanup
         return plan;
     }
 
-    SimulationResult SimulatePlan(const CleanupPlan& plan, const ScanOptions& currentOptions, const std::stop_token stop)
+    SimulationResult SimulatePlan(const CleanupPlan& plan, const ScanOptions& currentOptions, const std::stop_token stop,
+        const std::function<void(const OperationRecord&)>& progress)
     {
         SimulationResult result;
         result.planId = plan.m_id;
@@ -172,15 +205,19 @@ namespace Cleanup
         for (size_t i = 0; i < plan.m_items.size(); ++i)
         {
             const auto& item = plan.m_items[i];
+            // Freeze the remainder once a caller changes configuration between item results.
+            if (global == PlanReason::None && !SameConfiguration(plan.m_options, currentOptions))
+                global = PlanReason::ConfigurationChanged;
             OperationRecord record;
             record.itemIndex = i;
             record.startedAt = Clock();
             record.reason = global != PlanReason::None ? global : item.reason;
-            record.systemError = item.systemError;
-            if (stop.stop_requested())
+            record.systemError = global == PlanReason::None ? item.systemError : 0;
+            if (stop.stop_requested() || record.reason == PlanReason::Cancelled)
             {
                 record.state = SimulationState::Cancelled;
                 record.reason = PlanReason::Cancelled;
+                record.systemError = 0;
             }
             else if (record.reason == PlanReason::None)
             {
@@ -197,7 +234,13 @@ namespace Cleanup
                     else if (!SameIdentity(item.candidate, *found->second)) record.reason = PlanReason::IdentityChanged;
                     else if (!SameMetadata(item.candidate, *found->second)) record.reason = PlanReason::FileChanged;
                 }
-                if (record.reason == PlanReason::None)
+                if (stop.stop_requested())
+                {
+                    record.state = SimulationState::Cancelled;
+                    record.reason = PlanReason::Cancelled;
+                    record.systemError = 0;
+                }
+                else if (record.reason == PlanReason::None)
                 {
                     record.state = SimulationState::Simulated;
                     if (item.disposition == Disposition::PermanentDelete)
@@ -207,6 +250,7 @@ namespace Cleanup
             result.estimatedReleaseUpperBound += record.estimatedReleaseUpperBound;
             record.finishedAt = Clock();
             result.records.push_back(record);
+            if (progress) progress(result.records.back());
         }
         result.finishedAt = Clock();
         return result;

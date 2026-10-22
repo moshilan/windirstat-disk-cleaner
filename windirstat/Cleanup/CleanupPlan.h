@@ -55,12 +55,16 @@ namespace Cleanup
         PlanReason m_reason = PlanReason::None;
         std::uint64_t m_estimated = 0;
         friend CleanupPlan BuildPlan(const ScanResult&, const std::vector<bool>&, const ScanOptions&, Disposition, std::stop_token);
-        friend SimulationResult SimulatePlan(const CleanupPlan&, const ScanOptions&, std::stop_token);
+        friend SimulationResult SimulatePlan(const CleanupPlan&, const ScanOptions&, std::stop_token,
+            const std::function<void(const OperationRecord&)>&);
     };
     // Copies only explicitly checked candidates. Incomplete previews cannot form a usable plan.
     CleanupPlan BuildPlan(const ScanResult& preview, const std::vector<bool>& selected,
         const ScanOptions& options, Disposition disposition = Disposition::RecycleBin, std::stop_token stop = {});
     // Fresh eligibility scan reuses the existing rules without changing them. No filesystem writes,
     // elevation, permission changes, application termination, automatic retry or fallback exist here.
-    SimulationResult SimulatePlan(const CleanupPlan& plan, const ScanOptions& currentOptions, std::stop_token stop = {});
+    // Reports each completed observation; cancellation affects all remaining observations. A callback
+    // exception stops the simulation, without retry. No handle or permission to execute is returned.
+    SimulationResult SimulatePlan(const CleanupPlan& plan, const ScanOptions& currentOptions, std::stop_token stop = {},
+        const std::function<void(const OperationRecord&)>& progress = {});
 }
