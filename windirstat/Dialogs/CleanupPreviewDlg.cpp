@@ -194,13 +194,23 @@ void CCleanupPreviewDlg::OnSize(const UINT type, const int width, const int heig
 void CCleanupPreviewDlg::LayoutPanes()
 {
     // The existing dialog layout restores baseline rectangles on every resize.
-    // Apply the two user offsets afterwards, keeping every pane usable.
+    // Apply user offsets afterwards, keeping every pane usable.
     auto categories = GetChildWindowRect(m_categories.Handle());
     auto files = GetChildWindowRect(m_files.Handle());
     auto details = GetChildWindowRect(GetDlgItem(IDC_CP_DETAILS).Handle());
+    auto exclusions = GetChildWindowRect(m_exclusions.Handle());
+    auto addExclusion = GetChildWindowRect(GetDlgItem(IDC_CP_ADD_EXCLUSION).Handle());
+    auto issues = GetChildWindowRect(GetDlgItem(IDC_CP_ISSUES).Handle());
     const int minimum = ScaleForDpi(32);
     const int fileMinimum = ScaleForDpi(64);
     const int categoryMinimum = ScaleForDpi(65);
+    m_issuesDelta = std::clamp(m_issuesDelta, minimum - issues.Height(),
+        std::max(minimum - issues.Height(), categories.Height() + files.Height() + details.Height() - categoryMinimum - fileMinimum - minimum));
+    files.bottom -= m_issuesDelta;
+    details.Offset(0, -m_issuesDelta);
+    exclusions.Offset(0, -m_issuesDelta);
+    addExclusion.Offset(0, -m_issuesDelta);
+    issues.top -= m_issuesDelta;
     m_categoryDelta = std::clamp(m_categoryDelta, categoryMinimum - categories.Height(),
         std::max(categoryMinimum - categories.Height(), files.Height() + details.Height() - fileMinimum - minimum));
     m_detailDelta = std::clamp(m_detailDelta, minimum - details.Height(),
@@ -212,6 +222,9 @@ void CCleanupPreviewDlg::LayoutPanes()
     m_categories.MoveWindow(categories);
     m_files.MoveWindow(files);
     GetDlgItem(IDC_CP_DETAILS).MoveWindow(details);
+    m_exclusions.MoveWindow(exclusions);
+    GetDlgItem(IDC_CP_ADD_EXCLUSION).MoveWindow(addExclusion);
+    GetDlgItem(IDC_CP_ISSUES).MoveWindow(issues);
     for (const auto id : { IDC_CP_SORT_SIZE, IDC_CP_HIDE_ZERO })
     {
         auto rect = GetChildWindowRect(GetDlgItem(id).Handle());
@@ -228,9 +241,12 @@ void CCleanupPreviewDlg::OnPaint()
     const auto files = GetChildWindowRect(m_files.Handle());
     const auto details = GetChildWindowRect(GetDlgItem(IDC_CP_DETAILS).Handle());
     const auto toolbar = GetChildWindowRect(GetDlgItem(IDC_CP_SORT_SIZE).Handle());
+    const auto exclusions = GetChildWindowRect(m_exclusions.Handle());
+    const auto issues = GetChildWindowRect(GetDlgItem(IDC_CP_ISSUES).Handle());
     const CPen pen(PS_SOLID, 1, DarkMode::SystemColor(COLOR_3DSHADOW));
     const GdiObjectSelection selection(&dc, &pen);
-    for (const int y : { (categories.bottom + toolbar.top) / 2, (files.bottom + details.top) / 2 })
+    for (const int y : { (categories.bottom + toolbar.top) / 2, (files.bottom + details.top) / 2,
+        (exclusions.bottom + issues.top) / 2 })
     {
         dc.MoveTo(files.left, y);
         dc.LineTo(files.right, y);
@@ -243,9 +259,12 @@ int CCleanupPreviewDlg::SplitterAt(const CPoint point) const
     const auto files = GetChildWindowRect(m_files.Handle());
     const auto details = GetChildWindowRect(GetDlgItem(IDC_CP_DETAILS).Handle());
     const auto toolbar = GetChildWindowRect(GetDlgItem(IDC_CP_SORT_SIZE).Handle());
+    const auto exclusions = GetChildWindowRect(m_exclusions.Handle());
+    const auto issues = GetChildWindowRect(GetDlgItem(IDC_CP_ISSUES).Handle());
     if (point.x < files.left || point.x >= files.right) return 0;
     if (point.y >= categories.bottom && point.y < toolbar.top) return 1;
     if (point.y >= files.bottom && point.y < details.top) return 2;
+    if (point.y >= exclusions.bottom && point.y < issues.top) return 3;
     return 0;
 }
 
@@ -264,7 +283,8 @@ void CCleanupPreviewDlg::OnMouseMove(UINT, const CPoint point)
     const int delta = point.y - m_dragY;
     m_dragY = point.y;
     if (m_dragging == 1) m_categoryDelta += delta;
-    else m_detailDelta -= delta;
+    else if (m_dragging == 2) m_detailDelta -= delta;
+    else m_issuesDelta -= delta;
     m_layout.OnSize();
     LayoutPanes();
 }

@@ -83,11 +83,14 @@ function Move-CleanupDivider {
 }
 
 function Click-CleanupFilter {
-    param([IntPtr] $Dialog, [bool] $Expected)
+    param([IntPtr] $Dialog, [bool] $Expected, [switch] $Label)
     $button = Get-DialogControl $Dialog 'IDC_CP_HIDE_ZERO'
     $rect = [TestDesktop]::Rectangle($button)
     [TestDesktop]::Activate($Dialog)
-    [TestDesktop]::MoveCursor($rect[0] + 8, [int](($rect[1] + $rect[3]) / 2))
+    $x = $rect[0] + $(if ($Label) { 60 } else { 8 })
+    $y = [int](($rect[1] + $rect[3]) / 2)
+    [TestDesktop]::MoveCursor($x, $y)
+    Assert-Equal ([TestDesktop]::WindowAt($x, $y)) $button 'The native filter pointer reaches the checkbox or its label'
     [TestDesktop]::LeftButton($true)
     Start-Sleep -Milliseconds 80
     [TestDesktop]::LeftButton($false)
@@ -162,7 +165,7 @@ function Test-CleanupPreview {
     $desktop = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
     $fontSize = if ($Case.FontSize -eq 200 -and ($desktop.Width -lt 2000 -or $desktop.Height -lt 1600)) { 100 } else { $Case.FontSize }
     Write-TestNote "Native resize desktop: $($desktop.Width)x$($desktop.Height); font=$fontSize%; full-window-drag=$([System.Windows.Forms.SystemInformation]::DragFullWindows)"
-    $runner = New-TestRunner @{ Options = @{ LanguageId = $Case.Language; FontSizePercent = $fontSize } }
+    $runner = New-TestRunner @{ Options = @{ LanguageId = $Case.Language; FontSizePercent = $fontSize; DarkMode = 1 } }
     $runner | Add-Member -NotePropertyName Environment -NotePropertyValue @{ WDS_CLEANUP_TEST_ROOT = $root }
     $app = Start-TestApp -Runner $runner
     $selection = Wait-Until { Get-AppDialog $app 'IDC_SCAN_DUPLICATES' } 'Initial target selection is cancelled without scanning any disk'
@@ -198,6 +201,13 @@ function Test-CleanupPreview {
         'The resized path column keeps its requested width'
     Move-CleanupDivider $dialog $categories $files 12 -GapBelow (Get-DialogControl $dialog 'IDC_CP_SORT_SIZE')
     Move-CleanupDivider $dialog $files (Get-DialogControl $dialog 'IDC_CP_DETAILS') -12
+    $exclusionsControl = Get-DialogControl $dialog 'IDC_CP_EXCLUSIONS'
+    $issuesControl = Get-DialogControl $dialog 'IDC_CP_ISSUES'
+    $logHeight = [TestDesktop]::Rectangle($issuesControl)[3] - [TestDesktop]::Rectangle($issuesControl)[1]
+    Move-CleanupDivider $dialog $exclusionsControl $issuesControl -24
+    Assert-Equal ([TestDesktop]::Rectangle($issuesControl)[3] - [TestDesktop]::Rectangle($issuesControl)[1]) ($logHeight + 24) `
+        'Dragging the log upper boundary increases the visible diagnostic height'
+    Move-CleanupDivider $dialog $exclusionsControl $issuesControl 24
     $notice = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_NOTICE'))
     Assert-True ($notice -match 'synthetic|合成') 'The fixture override is explicitly visible'
     Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 0 'Opening the preview does not start a scan'
@@ -269,9 +279,9 @@ function Test-CleanupPreview {
     Assert-Sequence @([NativeListViewHelper]::GetItemTexts($categories, 1)) $counts `
         'Filtering does not change category counts'
     for ($toggle = 0; $toggle -lt 3; ++$toggle) {
-        Click-CleanupFilter $dialog $false
+        Click-CleanupFilter $dialog $false -Label
         Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) $expected.Count 'Repeated native clicks restore empty files'
-        Click-CleanupFilter $dialog $true
+        Click-CleanupFilter $dialog $true -Label
         Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) ($expected.Count - 1) 'Repeated native clicks hide empty files'
         Assert-Equal (Get-CleanupTotalsWithoutVisible $dialog) $unfilteredTotals 'Repeated toggles preserve all original check states and totals'
     }
@@ -346,9 +356,21 @@ function Test-CleanupPreview {
     Assert-Sequence (Get-CleanupAccessRules $restored) (Get-CleanupAccessRules $acl) `
         'Every access rule is restored, including rights, inheritance and deny state'
 
-    # Zero-byte metadata workload permits reliable cancellation without large disk writes.
-    for ($index = 0; $index -lt 2000; ++$index) {
+    # Exercise the actual preview cap, including label clicks after a full list rebuild.
+    for ($index = 0; $index -lt 10000; ++$index) {
         New-CleanupFixtureFile (Join-Path $local "Temp\stress\file-$index.tmp") 0 | Out-Null
+    }
+    Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
+    Wait-CleanupPreviewIdle $dialog
+    Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 10000 'The synthetic preview reaches its real candidate cap'
+    Invoke-CleanupButton $dialog 'IDC_CP_SELECT_ALL'
+    $cappedTotals = Get-CleanupTotalsWithoutVisible $dialog
+    for ($toggle = 0; $toggle -lt 2; ++$toggle) {
+        Click-CleanupFilter $dialog $true -Label
+        Assert-True ([NativeListViewHelper]::GetItemCount($files) -lt 10000) 'A label click hides empty files at the candidate cap'
+        Click-CleanupFilter $dialog $false -Label
+        Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 10000 'A second label click restores all capped candidates'
+        Assert-Equal (Get-CleanupTotalsWithoutVisible $dialog) $cappedTotals 'Capped list toggles preserve candidate totals and original checks'
     }
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Invoke-CleanupButton $dialog 'IDC_CP_CANCEL'

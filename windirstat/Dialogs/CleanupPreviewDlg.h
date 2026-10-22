@@ -62,6 +62,7 @@ private:
     CSize m_minimumSize{ 0, 0 };
     int m_categoryDelta = 0;
     int m_detailDelta = 0;
+    int m_issuesDelta = 0;
     int m_dragging = 0;
     int m_dragY = 0;
     std::mutex m_mutex;
