@@ -123,13 +123,15 @@ function Resize-CleanupByPointer {
                 'A native frame press enters the system sizing loop' -Seconds 5 | Out-Null
             Start-Sleep -Milliseconds 150
             [TestDesktop]::MoveCursor($x + $dx, $y + $dy)
-            Wait-Until {
-                $current = [TestDesktop]::Rectangle($Dialog)
-                ($dx -eq 0 -or $current[2] - $current[0] -lt $rect[2] - $rect[0]) -and
-                    ($dy -eq 0 -or $current[3] - $current[1] -lt $rect[3] - $rect[1])
-            } 'A real edge or corner drag can shrink the initial preview' -Seconds 10 -StableMilliseconds 150 | Out-Null
+            Start-Sleep -Milliseconds 150
         } finally { [TestDesktop]::LeftButton($false) }
         Wait-Until { [TestDesktop]::CaptureOwner($Dialog) -eq [IntPtr]::Zero } 'The native sizing loop ends after release' | Out-Null
+        # With outline-only native sizing, the rectangle changes on release.
+        Wait-Until {
+            $current = [TestDesktop]::Rectangle($Dialog)
+            ($dx -eq 0 -or $current[2] - $current[0] -lt $rect[2] - $rect[0]) -and
+                ($dy -eq 0 -or $current[3] - $current[1] -lt $rect[3] - $rect[1])
+        } 'A real edge or corner drag can shrink the initial preview' -Seconds 10 -StableMilliseconds 150 | Out-Null
         [TestDesktop]::Position($Dialog, $rect[0], $rect[1], $rect[2] - $rect[0], $rect[3] - $rect[1])
     }
 }
@@ -159,7 +161,7 @@ function Test-CleanupPreview {
     $before = @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash)
     $desktop = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
     $fontSize = if ($Case.FontSize -eq 200 -and ($desktop.Width -lt 2000 -or $desktop.Height -lt 1600)) { 100 } else { $Case.FontSize }
-    Write-TestNote "Native resize desktop: $($desktop.Width)x$($desktop.Height); font=$fontSize%"
+    Write-TestNote "Native resize desktop: $($desktop.Width)x$($desktop.Height); font=$fontSize%; full-window-drag=$([System.Windows.Forms.SystemInformation]::DragFullWindows)"
     $runner = New-TestRunner @{ Options = @{ LanguageId = $Case.Language; FontSizePercent = $fontSize } }
     $runner | Add-Member -NotePropertyName Environment -NotePropertyValue @{ WDS_CLEANUP_TEST_ROOT = $root }
     $app = Start-TestApp -Runner $runner
