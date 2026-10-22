@@ -12,7 +12,7 @@ namespace
         LVITEMW item{};
         item.iSubItem = column;
         item.pszText = const_cast<wchar_t*>(text.c_str());
-        SendMessageW(list.Handle(), LVM_SETITEMTEXTW, row, reinterpret_cast<LPARAM>(&item));
+        ::SendMessageW(list.Handle(), LVM_SETITEMTEXTW, row, reinterpret_cast<LPARAM>(&item));
     }
     void Row(CListCtrl& list, const int row, const std::wstring& text)
     {
@@ -20,9 +20,9 @@ namespace
         item.mask = LVIF_TEXT;
         item.iItem = row;
         item.pszText = const_cast<wchar_t*>(text.c_str());
-        SendMessageW(list.Handle(), LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
+        ::SendMessageW(list.Handle(), LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
     }
-    bool Checked(const CListCtrl& list, const int row)
+    bool IsRowChecked(const CListCtrl& list, const int row)
     {
         return (list.GetItemState(row, LVIS_STATEIMAGEMASK) >> 12) == 2;
     }
@@ -151,7 +151,7 @@ void CCleanupPreviewDlg::InvalidatePreview()
 {
     if (m_scanning || m_internalChange) return;
     m_internalChange = true;
-    SendMessageW(m_files.Handle(), LVM_DELETEALLITEMS, 0, 0);
+    ::SendMessageW(m_files.Handle(), LVM_DELETEALLITEMS, 0, 0);
     m_result = {};
     m_valid = false;
     for (size_t i = 0; i < Cleanup::CategoryCount; ++i)
@@ -180,7 +180,7 @@ void CCleanupPreviewDlg::OnScan()
     Cleanup::ScanOptions options = m_options;
     options.maximumCandidates = 10000;
     bool enabled = false;
-    for (size_t i = 0; i < options.enabled.size(); ++i) enabled |= options.enabled[i] = Checked(m_categories, static_cast<int>(i));
+    for (size_t i = 0; i < options.enabled.size(); ++i) enabled |= options.enabled[i] = IsRowChecked(m_categories, static_cast<int>(i));
     if (!enabled) { SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_CHOOSE)); return; }
     const auto exclusions = m_exclusions.GetText();
     for (size_t start = 0; start < exclusions.size();)
@@ -244,7 +244,7 @@ void CCleanupPreviewDlg::OnCancel()
         OnStop();
         return;
     }
-    KillTimer(CleanupTimer);
+    ::KillTimer(Handle(), CleanupTimer);
     CLayoutDialog::OnCancel();
 }
 void CCleanupPreviewDlg::OnTimer(UINT_PTR id)
@@ -313,7 +313,7 @@ void CCleanupPreviewDlg::UpdateSummary()
     for (size_t i = 0; i < m_result.candidates.size(); ++i)
     {
         bytes += m_result.candidates[i].allocatedBytes;
-        if (Checked(m_files, static_cast<int>(i))) { ++selected; selectedBytes += m_result.candidates[i].allocatedBytes; }
+        if (IsRowChecked(m_files, static_cast<int>(i))) { ++selected; selectedBytes += m_result.candidates[i].allocatedBytes; }
     }
     SetText(IDC_CP_TOTALS, Localization::Format(IDS_CP_TOTALS, FormatCount(m_result.candidates.size()), FormatBytes(bytes),
         FormatCount(selected), FormatBytes(selectedBytes)));
