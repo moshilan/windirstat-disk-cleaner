@@ -54,6 +54,12 @@ function Test-CleanupPreview {
     Assert-True ($null -ne $menu) 'Cleanup preview is present without an existing disk model'
     Invoke-AppCommand $app 'ID_CLEANUP_PREVIEW' -Unchecked
     $dialog = Wait-Until { Get-AppDialog $app 'IDC_CP_SCAN' } 'The independent cleanup preview opens'
+    $rectangle = [TestDesktop]::Rectangle($dialog)
+    $work = [System.Windows.Forms.Screen]::FromHandle($dialog).WorkingArea
+    Assert-True ($rectangle[2] -gt $rectangle[0] -and $rectangle[3] -gt $rectangle[1] -and
+        $rectangle[0] -ge $work.Left -and $rectangle[1] -ge $work.Top -and
+        $rectangle[2] -le $work.Right -and $rectangle[3] -le $work.Bottom) `
+        'The native preview has a valid size and fits entirely in the working area'
     $files = Get-DialogControl $dialog 'IDC_CP_FILES'
     $categories = Get-DialogControl $dialog 'IDC_CP_CATEGORIES'
     $notice = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_NOTICE'))

@@ -40,7 +40,7 @@ namespace
     }
 }
 
-CCleanupPreviewDlg::CCleanupPreviewDlg(WindowRef parent) : MessageTarget(IDD_CLEANUP_PREVIEW, &m_placement, parent) {}
+CCleanupPreviewDlg::CCleanupPreviewDlg(WindowRef parent) : MessageTarget(IDD_CLEANUP_PREVIEW, nullptr, parent) {}
 CCleanupPreviewDlg::~CCleanupPreviewDlg()
 {
     if (m_worker.joinable()) { m_worker.request_stop(); m_worker.join(); }
@@ -127,6 +127,16 @@ bool CCleanupPreviewDlg::OnInitDialog()
     m_layout.AddControl(IDC_CP_SELECT_NONE, 0, 1, 0, 0);
     m_layout.AddControl(IDCANCEL, 1, 1, 0, 0);
     m_layout.OnInitDialog(true);
+    MONITORINFO monitor{ sizeof(monitor) };
+    if (::GetMonitorInfoW(::MonitorFromWindow(Handle(), MONITOR_DEFAULTTONEAREST), &monitor))
+    {
+        const auto rect = GetWindowRect();
+        const int width = std::min(rect.Width(), static_cast<int>(monitor.rcWork.right - monitor.rcWork.left - 16));
+        const int height = std::min(rect.Height(), static_cast<int>(monitor.rcWork.bottom - monitor.rcWork.top - 16));
+        ::SetWindowPos(Handle(), nullptr, monitor.rcWork.left + (monitor.rcWork.right - monitor.rcWork.left - width) / 2,
+            monitor.rcWork.top + (monitor.rcWork.bottom - monitor.rcWork.top - height) / 2,
+            width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
     m_optionsValid = ResolveOptions();
     if (m_fixture) SetText(IDC_CP_NOTICE, Localization::Lookup(IDS_CP_FIXTURE_NOTICE));
     SetText(IDC_CP_STATUS, Localization::Lookup(m_optionsValid ? IDS_CP_READY : IDS_CP_UNAVAILABLE));
@@ -135,6 +145,17 @@ bool CCleanupPreviewDlg::OnInitDialog()
     UpdateSummary();
     SetTimer(CleanupTimer, 100);
     return true;
+}
+
+void CCleanupPreviewDlg::OnGetMinMaxInfo(MINMAXINFO* info)
+{
+    CLayoutDialog::OnGetMinMaxInfo(info);
+    MONITORINFO monitor{ sizeof(monitor) };
+    if (::GetMonitorInfoW(::MonitorFromWindow(Handle(), MONITOR_DEFAULTTONEAREST), &monitor))
+    {
+        info->ptMinTrackSize.x = std::min(info->ptMinTrackSize.x, monitor.rcWork.right - monitor.rcWork.left - 16);
+        info->ptMinTrackSize.y = std::min(info->ptMinTrackSize.y, monitor.rcWork.bottom - monitor.rcWork.top - 16);
+    }
 }
 
 void CCleanupPreviewDlg::SetScanning(const bool scanning)

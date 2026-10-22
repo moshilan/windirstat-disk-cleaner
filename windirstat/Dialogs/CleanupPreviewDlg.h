@@ -26,13 +26,13 @@ private:
     void OnCategoryChanged(NMHDR*, LRESULT*);
     void OnFileChanged(NMHDR*, LRESULT*);
     void OnTimer(UINT_PTR);
+    void OnGetMinMaxInfo(MINMAXINFO*);
     void UpdateSummary();
     void SetScanning(bool scanning);
     void FillResult();
     void InvalidatePreview();
     bool ResolveOptions();
     static std::wstring CategoryName(Cleanup::Category category);
-    RECT m_placement{};
     CListCtrl m_categories;
     CListCtrl m_files;
     CEdit m_exclusions;
@@ -65,6 +65,7 @@ inline std::span<const RouteEntry> CCleanupPreviewDlg::Routes()
         Route::Notify<&OnCategoryChanged>(LVN_ITEMCHANGED, IDC_CP_CATEGORIES),
         Route::Notify<&OnFileChanged>(LVN_ITEMCHANGED, IDC_CP_FILES),
         Route::Window<&OnTimer>(WM_TIMER),
+        Route::Window<&OnGetMinMaxInfo>(WM_GETMINMAXINFO),
         Route::Window<&OnCancel>(WM_CLOSE),
     };
     return entries;

@@ -129,7 +129,8 @@ function Test-PauseResumeScan {
 
 function Test-StopAndRescan {
     param($Context, $Case)
-    $root = New-StressTree
+    $count = if ($Case.ContainsKey('StatusOnly')) { [Math]::Max($StressFileCount, 10000) } else { $StressFileCount }
+    $root = New-StressTree -Count $count
     $app = Start-TestApp @($root) -Settings @{
         Options = @{ ScanningThreads = $Case.Threads }
     } -ScanDuplicates -DuringScan
@@ -139,7 +140,10 @@ function Test-StopAndRescan {
         Wait-Until { (Get-AppCommandState $app 'ID_SCAN_RESUME').Enabled } `
             'All workers suspend before cancellation' | Out-Null
     }
-    Invoke-AppCommand $app 'ID_SCAN_STOP'
+    if ($Case.ContainsKey('StatusOnly')) {
+        # Deliver cancellation immediately while the observed scan is active.
+        [void] [TestDesktop]::Message($app.Window, 0x0111, (Get-ResourceId 'ID_SCAN_STOP'))
+    } else { Invoke-AppCommand $app 'ID_SCAN_STOP' }
     Wait-AppIdle $app
     Assert-True ((Get-ScanOutcomeStatus $app).Contains('Scan stopped')) `
         'Cancellation is distinct from successful completion and read failures'
@@ -151,10 +155,10 @@ function Test-StopAndRescan {
     Assert-True ((Get-ScanOutcomeStatus $app).Contains('Analysis complete')) `
         'A successful rescan replaces the cancelled status'
     $rows = Save-AppReport $app 'rescanned'
-    Assert-Equal @(Get-ReportFiles $rows).Count ($StressFileCount + 1) `
+    Assert-Equal @(Get-ReportFiles $rows).Count ($count + 1) `
         'Rescanning replaces partial data without duplicate rows'
     Assert-Equal @($rows | Where-Object Name -IEQ $new).Count 1 'The new scan observes the external sentinel'
-    Assert-Equal ([long]$rows[0].'Logical Size') ([long]$StressFileCount * 65536 + 853) `
+    Assert-Equal ([long]$rows[0].'Logical Size') ([long]$count * 65536 + 853) `
         'A complete rescan retains exact logical byte totals'
     if (-not $Case.ContainsKey('StatusOnly')) { Assert-GraphRendered $app | Out-Null }
 }
@@ -275,7 +279,7 @@ Register-Scenario lifecycle.stop-suspended Lifecycle 'Cancellation of suspended 
     Test-StopAndRescan -Tags Desktop,Race -Requires Windows,Desktop -Data @{ Threads = 8; Suspended = $true }
 Register-Scenario scan.outcome.cancelled ScanOutcome 'Stopped status and exact totals after a fresh rescan' `
     Test-StopAndRescan -Tags Desktop,Race -Requires Windows,Desktop `
-    -Data @{ Threads = 8; Suspended = $true; StatusOnly = $true }
+    -Data @{ Threads = 1; Suspended = $false; StatusOnly = $true }
 Register-Scenario lifecycle.resize-overlap Lifecycle `
     'Live resize and scan suspension overlap without stranding rendering' `
     Test-ScanResizeOverlap -Tags Desktop,Race,Rendering -Requires Windows,Desktop
