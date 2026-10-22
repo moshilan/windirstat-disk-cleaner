@@ -7,6 +7,27 @@
 namespace
 {
     constexpr UINT_PTR CleanupTimer = 1;
+    constexpr std::array RefreshPhases{ L"DataUs", L"FilterUs", L"SortUs", L"ControlsUs", L"SummaryUs", L"TotalUs", L"PaintUs" };
+    std::uint64_t RefreshClock()
+    {
+        return std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+    void RefreshTiming(const HWND window, const wchar_t* phase, const std::uint64_t elapsed)
+    {
+        const auto name = std::wstring(L"WDS.Cleanup.Refresh.") + phase;
+        ::SetPropW(window, name.c_str(), reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(elapsed)));
+    }
+    LRESULT CALLBACK ProfileListPaint(HWND window, UINT message, WPARAM wp, LPARAM lp, UINT_PTR, DWORD_PTR owner)
+    {
+        if (message != WM_PAINT) return ::DefSubclassProc(window, message, wp, lp);
+        const auto started = RefreshClock();
+        const auto result = ::DefSubclassProc(window, message, wp, lp);
+        const auto dialog = reinterpret_cast<HWND>(owner);
+        const auto previous = reinterpret_cast<UINT_PTR>(::GetPropW(dialog, L"WDS.Cleanup.Refresh.PaintUs"));
+        RefreshTiming(dialog, L"PaintUs", previous + RefreshClock() - started);
+        return result;
+    }
     void Cell(CListCtrl& list, const int row, const int column, const std::wstring& text)
     {
         LVITEMW item{};
@@ -89,6 +110,12 @@ CCleanupPreviewDlg::CCleanupPreviewDlg(WindowRef parent) : MessageTarget(IDD_CLE
 CCleanupPreviewDlg::~CCleanupPreviewDlg()
 {
     if (m_worker.joinable()) { m_worker.request_stop(); m_worker.join(); }
+    if (m_fixture)
+    {
+        ::RemoveWindowSubclass(m_files.Handle(), ProfileListPaint, 1);
+        for (const auto* phase : RefreshPhases)
+            ::RemovePropW(Handle(), (std::wstring(L"WDS.Cleanup.Refresh.") + phase).c_str());
+    }
 }
 std::wstring CCleanupPreviewDlg::CategoryName(const Cleanup::Category category)
 {
@@ -253,6 +280,7 @@ bool CCleanupPreviewDlg::OnInitDialog()
             width, height, SWP_NOZORDER | SWP_NOACTIVATE);
     }
     m_optionsValid = ResolveOptions();
+    if (m_fixture) ::SetWindowSubclass(m_files.Handle(), ProfileListPaint, 1, reinterpret_cast<DWORD_PTR>(Handle()));
     if (m_fixture) SetText(IDC_CP_NOTICE, Localization::Lookup(IDS_CP_FIXTURE_NOTICE));
     LoadExclusions();
     SetText(IDC_CP_STATUS, Localization::Lookup(!m_optionsValid ? IDS_CP_UNAVAILABLE :
@@ -402,40 +430,63 @@ bool CCleanupPreviewDlg::OnSetCursor(const WindowRef window, const UINT hit, UIN
 
 void CCleanupPreviewDlg::FillFiles()
 {
+    const auto started = RefreshClock();
+    if (m_fixture) RefreshTiming(Handle(), L"PaintUs", 0);
     const int focused = m_files.GetFirstSelectedIndex();
     const size_t focus = focused >= 0 && static_cast<size_t>(focused) < m_visible.size() ?
         m_visible[focused] : m_result.candidates.size();
     m_internalChange = true;
+    std::uint64_t dataUs = RefreshClock() - started, controlsUs = 0;
+    auto phase = RefreshClock();
     m_files.SetRedraw(false);
     ::SendMessageW(m_files.Handle(), LVM_DELETEALLITEMS, 0, 0);
+    controlsUs += RefreshClock() - phase;
+    phase = RefreshClock();
     m_visible.clear();
     for (size_t i = 0; i < m_result.candidates.size(); ++i)
         if (!m_hideEmpty || m_result.candidates[i].logicalBytes != 0) m_visible.push_back(i);
+    const auto filterUs = RefreshClock() - phase;
+    phase = RefreshClock();
     if (m_sortSize) std::stable_sort(m_visible.begin(), m_visible.end(), [this](size_t a, size_t b)
     {
         const auto left = m_result.candidates[a].allocatedBytes, right = m_result.candidates[b].allocatedBytes;
         return m_descending ? left > right : left < right;
     });
+    const auto sortUs = RefreshClock() - phase;
     for (size_t i = 0; i < m_visible.size(); ++i)
     {
         const auto index = m_visible[i];
         const auto& candidate = m_result.candidates[index];
         const int row = static_cast<int>(i);
+        phase = RefreshClock();
+        const std::array cells{ CategoryName(candidate.category), FormatBytes(candidate.allocatedBytes),
+            candidate.ruleId + L" / v" + std::to_wstring(candidate.ruleVersion),
+            Localization::Lookup(candidate.reasonKey), RiskName(candidate.risk, candidate.assessment) };
+        dataUs += RefreshClock() - phase;
+        phase = RefreshClock();
         Row(m_files, row, candidate.path);
         Check(m_files, row, m_selected[index]);
-        Cell(m_files, row, 1, CategoryName(candidate.category));
-        Cell(m_files, row, 2, FormatBytes(candidate.allocatedBytes));
-        Cell(m_files, row, 3, candidate.ruleId + L" / v" + std::to_wstring(candidate.ruleVersion));
-        Cell(m_files, row, 4, Localization::Lookup(candidate.reasonKey));
-        Cell(m_files, row, 5, RiskName(candidate.risk, candidate.assessment));
+        for (int column = 1; column <= static_cast<int>(cells.size()); ++column)
+            Cell(m_files, row, column, cells[column - 1]);
         if (index == focus) m_files.SetItemState(row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        controlsUs += RefreshClock() - phase;
     }
+    phase = RefreshClock();
     if (std::ranges::find(m_visible, focus) == m_visible.end()) SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_SELECT_HINT));
     m_files.SetRedraw(true);
     m_files.Invalidate();
     m_internalChange = false;
     SetText(IDC_CP_SORT_SIZE, Localization::Lookup(m_sortSize && m_descending ? IDS_CP_SORT_ASC : IDS_CP_SORT_DESC));
     UpdateSummary();
+    if (m_fixture)
+    {
+        RefreshTiming(Handle(), L"DataUs", dataUs);
+        RefreshTiming(Handle(), L"FilterUs", filterUs);
+        RefreshTiming(Handle(), L"SortUs", sortUs);
+        RefreshTiming(Handle(), L"ControlsUs", controlsUs);
+        RefreshTiming(Handle(), L"SummaryUs", RefreshClock() - phase);
+        RefreshTiming(Handle(), L"TotalUs", RefreshClock() - started);
+    }
 }
 void CCleanupPreviewDlg::OnSortSize()
 {
