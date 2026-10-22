@@ -407,6 +407,29 @@ function Test-DeniedDirectory {
         ([Convert]::ToUInt32($_.'WinDirStat Attributes'.Substring(2), 16) -band 0x4000) -ne 0
     }).Count 0 'An intentional directory exclusion does not mark the scan incomplete'
 
+    if ($Case.Format -eq 'json') {
+        foreach ($language in 9, 30724) {
+            $uiRunner = New-TestRunner @{ Options = @{ LanguageId = $language } }
+            $ui = Start-TestApp @($Context.Fixture) -Runner $uiRunner -DuringScan
+            $dialog = Wait-Until { Get-AppDialog $ui 'IDC_MESSAGE_LISTVIEW' } `
+                'A visible partial scan explains affected locations'
+            $summary = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_MESSAGE_TEXT'))
+            $details = [NativeListViewHelper]::GetItemTexts((Get-DialogControl $dialog 'IDC_MESSAGE_LISTVIEW'))
+            Assert-Equal @($details).Count 1 'Only the failed directory is counted, not its ancestors'
+            Assert-True ($details[0].Contains($blocked)) 'The explanation identifies the unreadable path'
+            Assert-True ($details[0].Length -gt ($blocked.Length + 2)) 'The path includes a system error reason'
+            $expected = if ($language -eq 9) { 'Scan ended (incomplete results)' } else { '扫描已结束（结果不完整）' }
+            Assert-True ((Get-ScanOutcomeStatus $ui).Contains($expected)) 'The status distinguishes ended from complete'
+            Assert-True ($summary.Contains($(if ($language -eq 9) { 'lower than actual usage' } else { '低于实际占用' }))) `
+                'The explanation warns that unread data can understate totals'
+            Close-AppDialog $dialog -Button (Get-ResourceId 'IDC_MESSAGE_BUTTONRIGHT')
+            Wait-AppIdle $ui
+            Assert-True (-not (Get-AppCommandState $ui 'ID_SCAN_STOP').Enabled) `
+                'Incomplete results do not leave the scan running'
+            Stop-TestApp $ui
+        }
+    }
+
     # Inspect and refresh the loaded model through targeted messages while its main window stays hidden.
     $app = Start-TestApp -Runner $runner -Arguments @('/loadfrom', $report) -Hidden
     $list = Wait-Until {

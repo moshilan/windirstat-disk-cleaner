@@ -1,3 +1,13 @@
+function Get-ScanOutcomeStatus {
+    param($App)
+    foreach ($control in [TestDesktop]::Children($App.Window)) {
+        if ([TestDesktop]::Class($control) -eq 'WdsStatusBar32') {
+            return [TestDesktop]::ControlText($control)
+        }
+    }
+    throw 'The scan status bar is missing'
+}
+
 function Get-ScanPolicyTabs {
     param($App)
     foreach ($tab in [TestDesktop]::Children($App.Window)) {
@@ -28,6 +38,8 @@ function Test-ScanPolicy {
         DriveSelect = @{ SelectDrivesRadio = 2; SelectDrivesFolder = $root }
     }
     $app = Start-TestApp @($root) -Runner $runner
+    Assert-True ((Get-ScanOutcomeStatus $app).Contains('Analysis complete')) `
+        'A fully readable synthetic scan reports completion'
     Get-AppList $app -AllFiles | Out-Null
     Assert-True ('Duplicate Files' -notin @(Get-ScanPolicyTabs $app)) `
         'A stale persisted opt-in does not enable hashing on ordinary startup'

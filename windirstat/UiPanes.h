@@ -489,6 +489,8 @@ public:
         if (target.text == text && target.width == width) return;
         target.text.assign(text);
         target.width = width;
+        // Expose the owner-drawn text to accessibility tools and UI regression checks.
+        SetWindowTextW(m_hWnd, (m_panes[0].text + L" | " + m_panes[1].text + L" | " + m_panes[2].text).c_str());
         Invalidate();
     }
     void OnAppearanceChanged() override { if (IsWindow(m_hWnd)) Invalidate(); }

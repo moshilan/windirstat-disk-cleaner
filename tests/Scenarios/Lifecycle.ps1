@@ -141,6 +141,8 @@ function Test-StopAndRescan {
     }
     Invoke-AppCommand $app 'ID_SCAN_STOP'
     Wait-AppIdle $app
+    Assert-True ((Get-ScanOutcomeStatus $app).Contains('Scan stopped')) `
+        'Cancellation is distinct from successful completion and read failures'
     Assert-True (-not (Get-AppCommandState $app 'ID_SCAN_RESUME').Enabled) `
         'A stopped scan cannot accidentally resume old workers'
     $new = New-TestFile (Join-Path $root 'after-stop.txt') 853

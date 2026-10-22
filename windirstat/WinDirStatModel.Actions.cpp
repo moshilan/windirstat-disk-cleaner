@@ -989,7 +989,7 @@ std::wstring CWinDirStatModel::GetScanStatusText() const
     case ScanPhase::Finalizing: label = IDS_SCAN_PHASE_FINALIZING; break;
     case ScanPhase::Complete: label = IDS_SCAN_PHASE_COMPLETE; break;
     case ScanPhase::Stopped: label = IDS_SCAN_PHASE_STOPPED; break;
-    case ScanPhase::Incomplete: label = IDS_SCAN_INCOMPLETE; break;
+    case ScanPhase::Incomplete: label = IDS_SCAN_PHASE_INCOMPLETE; break;
     default: return {};
     }
 
@@ -1348,22 +1348,23 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
         // Recompute ancestor completeness after branch refreshes without hiding untouched failures.
         CItem::ReconcileScanResults(GetRootItem(), stopReason == Stop);
         constexpr size_t maxReported = 10;
-        std::wstring scanErrors;
+        std::vector<std::wstring> scanErrors;
+        bool hasRemoteErrors = false;
         std::unordered_set<std::wstring> reported;
-        std::vector<CItem*> pending = items.empty() ? std::vector{ GetRootItem() } : items;
-        while (!pending.empty() && reported.size() <= maxReported)
+        std::vector<CItem*> pending{ GetRootItem() };
+        while (!pending.empty())
         {
             auto* item = pending.back(); pending.pop_back();
             const auto& result = item->GetScanResult();
-            if (item->IsTypeOrFlag(ITF_REMOTE) && !result.error.empty())
+            if (!result.error.empty())
             {
+                hasRemoteErrors |= item->IsTypeOrFlag(ITF_REMOTE);
                 const auto& message = result.error;
-                if (reported.insert(message).second)
-                    scanErrors += (scanErrors.empty() ? L"" : L"\n") +
-                        (reported.size() > maxReported ? L"..." : message);
+                if (reported.insert(message).second && scanErrors.size() < maxReported)
+                    scanErrors.push_back(message);
             }
             if (!item->IsLeaf()) for (auto* child : item->GetChildren())
-                if (!child->IsLeaf() && child->IsTypeOrFlag(ITF_REMOTE)) pending.push_back(child);
+                if (!child->IsLeaf() && child->IsTypeOrFlag(ITF_SCANERROR)) pending.push_back(child);
         }
 
         // Sorting and other finalization tasks
@@ -1438,10 +1439,13 @@ void CWinDirStatModel::StartScanningEngine(std::vector<CItem*> items)
             CMainFrame::Get()->UpdatePaneText();
         });
 
-        // Present remote failures after the scan UI has settled.
+        // Explain incomplete results without opening dialogs for local headless callers.
         if (!scanErrors.empty()) CMainFrame::Get()->InvokeInMessageThread([&]
         {
-            DisplayError(Localization::Lookup(IDS_SCAN_INCOMPLETE) + L"\n\n" + scanErrors);
+            if (hasRemoteErrors || CMainFrame::Get()->IsWindowVisible())
+                CMessageBoxDlg::Show(Localization::Format(IDS_SCAN_FAILURE_DETAILS,
+                    FormatCount(reported.size()), FormatCount(scanErrors.size())),
+                    scanErrors, L"", false, MB_OK | MB_ICONWARNING, CMainFrame::Get(), CSize(720, 360));
         });
 
         // Defer heap cleanup until the timer observes that this thread has exited.
