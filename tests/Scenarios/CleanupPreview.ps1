@@ -41,6 +41,39 @@ function Get-CleanupAccessRules {
     } | Sort-Object)
 }
 
+function Get-CleanupTotalsWithoutVisible {
+    param([IntPtr] $Dialog)
+    return ([TestDesktop]::ControlText((Get-DialogControl $Dialog 'IDC_CP_TOTALS')) -replace '\s*\|\s*(Visible:|显示：).*$', '')
+}
+
+function Move-CleanupDivider {
+    param([IntPtr] $Dialog, [IntPtr] $Above, [IntPtr] $Below, [int] $Offset, [IntPtr] $GapBelow = $Below)
+    $upper = [TestDesktop]::Rectangle($Above)
+    $lower = [TestDesktop]::Rectangle($Below)
+    $gapEnd = [TestDesktop]::Rectangle($GapBelow)
+    $window = [TestDesktop]::Rectangle($Dialog)
+    $client = [TestDesktop]::ClientSize($Dialog)
+    # A restored thick-frame dialog has equal left/right/bottom frame widths.
+    $border = [int](($window[2] - $window[0] - $client[0]) / 2)
+    $originX = $window[0] + $border
+    $originY = $window[3] - $border - $client[1]
+    $x = [int](($upper[0] + $upper[2]) / 2) - $originX
+    $y = [int](($upper[3] + $gapEnd[1]) / 2) - $originY
+    $point = ($y -shl 16) -bor ($x -band 0xFFFF)
+    [TestDesktop]::Activate($Dialog)
+    [void] [TestDesktop]::Message($Dialog, 0x0201, 1, $point)
+    Assert-Equal ([TestDesktop]::CaptureOwner($Dialog)) $Dialog 'A preview divider acquires mouse capture'
+    $point = (($y + $Offset) -shl 16) -bor ($x -band 0xFFFF)
+    [void] [TestDesktop]::Message($Dialog, 0x0200, 1, $point)
+    [void] [TestDesktop]::Message($Dialog, 0x0202, 0, $point)
+    $movedUpper = [TestDesktop]::Rectangle($Above)
+    $movedLower = [TestDesktop]::Rectangle($Below)
+    Assert-Equal ($movedUpper[3] - $upper[3]) $Offset 'The upper preview region follows the divider'
+    Assert-Equal ($movedLower[1] - $lower[1]) $Offset 'The lower preview region follows the divider'
+    Assert-True ($movedUpper[3] -lt $movedLower[1]) 'Dragging preserves a gap between preview regions'
+    Assert-Equal ([TestDesktop]::CaptureOwner($Dialog)) ([IntPtr]::Zero) 'Finishing a divider drag releases capture'
+}
+
 function Test-CleanupPreview {
     param($Context, $Case)
     $root = $Context.Fixture
@@ -55,6 +88,9 @@ function Test-CleanupPreview {
         'pip\Cache\http-v2\a\b\c\d\e\response.body'
     )
     $expected = @($relative | ForEach-Object { New-CleanupFixtureFile (Join-Path $local $_) })
+    $largest = New-CleanupFixtureFile (Join-Path $local 'Temp\old.tmp') 32769
+    $zero = New-CleanupFixtureFile (Join-Path $local 'Temp\zero.tmp') 0
+    $expected += $zero
     New-CleanupFixtureFile (Join-Path $local 'Temp\recent.tmp') -Recent | Out-Null
     New-CleanupFixtureFile (Join-Path $local 'Temp\personal.docx') | Out-Null
     New-CleanupFixtureFile (Join-Path $local 'Google\Chrome\User Data\Default\Cookies') | Out-Null
@@ -79,6 +115,23 @@ function Test-CleanupPreview {
         'The native preview has a valid size and fits entirely in the working area'
     $files = Get-DialogControl $dialog 'IDC_CP_FILES'
     $categories = Get-DialogControl $dialog 'IDC_CP_CATEGORIES'
+    $initialFiles = [TestDesktop]::Rectangle($files)
+    $width = $rectangle[2] - $rectangle[0]
+    $height = $rectangle[3] - $rectangle[1]
+    [TestDesktop]::Position($dialog, $work.Left + 4, $work.Top + 4, $width + 8, $height + 8)
+    $resizedFiles = [TestDesktop]::Rectangle($files)
+    Assert-Equal ($resizedFiles[2] - $resizedFiles[0] - $initialFiles[2] + $initialFiles[0]) 8 `
+        'The file list grows with the preview width'
+    Assert-Equal ($resizedFiles[3] - $resizedFiles[1] - $initialFiles[3] + $initialFiles[1]) 8 `
+        'The file list grows with the preview height'
+    [TestDesktop]::Position($dialog, $rectangle[0], $rectangle[1], $width, $height)
+    $columnWidth = [TestDesktop]::Message($files, 0x101D, 0).ToInt32()
+    Assert-True ([NativeListViewHelper]::SetHeaderWidth($files, 0, $columnWidth + 70)) `
+        'The native path column accepts a user header resize'
+    Assert-Equal ([TestDesktop]::Message($files, 0x101D, 0).ToInt32()) ($columnWidth + 70) `
+        'The resized path column keeps its requested width'
+    Move-CleanupDivider $dialog $categories $files 12 -GapBelow (Get-DialogControl $dialog 'IDC_CP_SORT_SIZE')
+    Move-CleanupDivider $dialog $files (Get-DialogControl $dialog 'IDC_CP_DETAILS') -12
     $notice = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_NOTICE'))
     Assert-True ($notice -match 'synthetic|合成') 'The fixture override is explicitly visible'
     Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) 0 'Opening the preview does not start a scan'
@@ -94,7 +147,10 @@ function Test-CleanupPreview {
     Assert-Sequence @([NativeListViewHelper]::GetItemTexts($files) | Sort-Object) @($expected | Sort-Object) `
         'Only audited old temporary and cache files appear in the GUI'
     $counts = @([NativeListViewHelper]::GetItemTexts($categories, 1))
-    Assert-Sequence $counts @('3','1','1','1','1') 'Category counts assign each candidate once'
+    Assert-Sequence $counts @('4','1','1','1','1') 'Category counts include zero-allocation candidates exactly once'
+    $coverage = @([NativeListViewHelper]::GetItemTexts($categories, 4))
+    Assert-Equal @($coverage | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count 0 `
+        'All five categories explain their discovery outcome'
     foreach ($column in 1,2,3,4,5) {
         $values = @([NativeListViewHelper]::GetItemTexts($files, $column))
         Assert-Equal @($values | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count 0 `
@@ -113,6 +169,47 @@ function Test-CleanupPreview {
     Invoke-CleanupButton $dialog 'IDC_CP_SELECT_NONE'
     $noneTotals = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_TOTALS'))
     Assert-True ($allTotals -ne $noneTotals) 'Selected counts and allocation estimates update with selection'
+
+    # One checked identity must survive numeric sorting rather than following its old row index.
+    $largestRow = [array]::IndexOf([NativeListViewHelper]::GetItemTexts($files), $largest)
+    Assert-True ([NativeListViewHelper]::FocusListView($files) -and [NativeListViewHelper]::SelectSingleItem($files, $largestRow)) `
+        'The largest candidate is focused before checking it'
+    [void] [TestDesktop]::Message($files, 0x0100, 0x20)
+    [void] [TestDesktop]::Message($files, 0x0101, 0x20)
+    Assert-Equal ([TestDesktop]::Message($files, 0x102C, $largestRow, 0xF000).ToInt32() -band 0xF000) 0x2000 `
+        'Keyboard selection checks the intended candidate'
+    $selectedTotals = Get-CleanupTotalsWithoutVisible $dialog
+    Invoke-CleanupButton $dialog 'IDC_CP_SORT_SIZE'
+    Assert-Equal ([NativeListViewHelper]::GetItemTexts($files)[0]) $largest 'Size descending puts the largest allocation first'
+    Assert-Equal ([TestDesktop]::Message($files, 0x102C, 0, 0xF000).ToInt32() -band 0xF000) 0x2000 `
+        'The same candidate stays checked after descending sorting'
+    Assert-Equal (Get-CleanupTotalsWithoutVisible $dialog) $selectedTotals 'Sorting does not change candidate or selected totals'
+    Invoke-CleanupButton $dialog 'IDC_CP_SORT_SIZE'
+    Assert-Equal ([NativeListViewHelper]::GetItemTexts($files)[0]) $zero 'Size ascending puts the zero-allocation candidate first'
+    $largestRow = [array]::IndexOf([NativeListViewHelper]::GetItemTexts($files), $largest)
+    Assert-Equal ([TestDesktop]::Message($files, 0x102C, $largestRow, 0xF000).ToInt32() -band 0xF000) 0x2000 `
+        'Ascending sorting preserves the checked file identity'
+    Assert-True ([NativeListViewHelper]::FocusListView($files) -and [NativeListViewHelper]::SelectSingleItem($files, 0)) `
+        'A sorted candidate can be selected for details'
+    Wait-Until { [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_DETAILS')).Contains($zero) } `
+        'Sorted rows still show the matching complete path and rule details' | Out-Null
+    Invoke-CleanupButton $dialog 'IDC_CP_SELECT_ALL'
+    $unfilteredTotals = Get-CleanupTotalsWithoutVisible $dialog
+    Invoke-CleanupButton $dialog 'IDC_CP_HIDE_ZERO'
+    Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) ($expected.Count - 1) 'The zero-allocation filter hides exactly one row'
+    Assert-True ($zero -notin [NativeListViewHelper]::GetItemTexts($files)) 'The zero-allocation candidate is hidden'
+    Assert-Equal (Get-CleanupTotalsWithoutVisible $dialog) $unfilteredTotals `
+        'Filtering changes neither total allocation nor hidden checked candidates'
+    Assert-Sequence @([NativeListViewHelper]::GetItemTexts($categories, 1)) $counts `
+        'Filtering does not change category counts'
+    Invoke-CleanupButton $dialog 'IDC_CP_SELECT_NONE'
+    Invoke-CleanupButton $dialog 'IDC_CP_SELECT_ALL'
+    Invoke-CleanupButton $dialog 'IDC_CP_HIDE_ZERO'
+    Assert-Equal ([NativeListViewHelper]::GetItemCount($files)) $expected.Count 'Disabling the filter restores every candidate'
+    $zeroRow = [array]::IndexOf([NativeListViewHelper]::GetItemTexts($files), $zero)
+    Assert-Equal ([TestDesktop]::Message($files, 0x102C, $zeroRow, 0xF000).ToInt32() -band 0xF000) 0x1000 `
+        'Clear all includes hidden candidates and select visible does not check them again'
+    Invoke-CleanupButton $dialog 'IDC_CP_SELECT_NONE'
     Assert-True ([NativeListViewHelper]::FocusListView($files) -and [NativeListViewHelper]::SelectSingleItem($files, 0)) `
         'A candidate can be focused for complete details'
     $first = [NativeListViewHelper]::GetItemTexts($files)[0]
@@ -126,7 +223,7 @@ function Test-CleanupPreview {
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Wait-CleanupPreviewIdle $dialog
     $afterExclusion = @([NativeListViewHelper]::GetItemTexts($files))
-    Assert-Equal $afterExclusion.Count 6 'Excluding one directory removes exactly one candidate'
+    Assert-Equal $afterExclusion.Count 7 'Excluding one directory removes exactly one candidate'
     Assert-True ((Join-Path $local 'Temp\excluded-sibling\item.temp') -in $afterExclusion) `
         'A similarly named sibling is not accidentally excluded'
     Assert-True ((Join-Path $local 'Temp\excluded\item.tmp') -notin $afterExclusion) 'The excluded file is absent'
@@ -164,6 +261,8 @@ function Test-CleanupPreview {
     Assert-True ($issues.StartsWith($blocked)) 'Actual failure details appear before general estimate notes'
     $state = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_STATUS'))
     Assert-True ($state -match 'incomplete|不完整') 'Read failures do not report a complete preview'
+    Assert-True ([NativeListViewHelper]::GetItemTexts($categories, 4)[0] -match 'partial|fail|部分|失败|不完整') `
+        'The affected Temp category exposes a read failure rather than an empty result'
     Set-Acl -LiteralPath $blocked -AclObject $acl
     $restored = Get-Acl -LiteralPath $blocked
     Assert-Equal ($restored.GetOwner([Security.Principal.SecurityIdentifier]).Value) `

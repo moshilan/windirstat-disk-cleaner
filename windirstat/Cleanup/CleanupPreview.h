@@ -47,6 +47,16 @@ namespace Cleanup
         std::uint64_t creationTime = 0;
     };
     struct Summary { std::uint64_t files = 0; std::uint64_t allocatedBytes = 0; };
+    enum class CoverageState : std::uint8_t { NotScanned, Disabled, Missing, NoMatches, Matches, Skipped, Failed, Partial };
+    struct CategoryCoverage
+    {
+        CoverageState state = CoverageState::NotScanned;
+        std::uint64_t rootsFound = 0;
+        std::uint64_t missingRoots = 0;
+        std::uint64_t checkedFiles = 0;
+        std::uint64_t failures = 0;
+        std::uint64_t skipped = 0;
+    };
     struct Warning { std::wstring path; std::wstring message; bool resourceKey = false; };
     struct ScanOptions
     {
@@ -69,6 +79,7 @@ namespace Cleanup
     {
         std::vector<Candidate> candidates;
         std::array<Summary, CategoryCount> categories{};
+        std::array<CategoryCoverage, CategoryCount> coverage{};
         std::array<std::uint64_t, SkipReasonCount> skipped{};
         std::vector<Warning> warnings;
         std::uint64_t checkedFiles = 0;

@@ -1,6 +1,7 @@
 // Read-only preview behavioral tests. All writes target a fresh, explicitly named fixture.
 #include <windows.h>
 #include <winioctl.h>
+#include <sddl.h>
 #include <filesystem>
 #include <cstring>
 #include <fstream>
@@ -46,6 +47,16 @@ static bool Has(const Cleanup::ScanResult& result, const fs::path& path)
     for (const auto& item : result.candidates) if (_wcsicmp(item.path.c_str(), normalized.c_str()) == 0) return true;
     return false;
 }
+static std::uint64_t Allocation(const fs::path& path)
+{
+    HANDLE file = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    FILE_STANDARD_INFO info{};
+    const bool ok = file != INVALID_HANDLE_VALUE && GetFileInformationByHandleEx(file, FileStandardInfo, &info, sizeof(info));
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    if (!ok || info.AllocationSize.QuadPart < 0) throw std::runtime_error("Cannot query synthetic allocation");
+    return static_cast<std::uint64_t>(info.AllocationSize.QuadPart);
+}
 static void Junction(const fs::path& link, const fs::path& target)
 {
     fs::create_directories(link);
@@ -83,6 +94,8 @@ int wmain(int argc, wchar_t** argv)
         std::vector<fs::path> expected{ temp/L"old.tmp", temp/L"nested/old.temp", chrome/L"cache.bin",
             edge/L"cache.bin", firefox/L"0123456789ABCDEF0123456789ABCDEF01234567", pip/L"response.body" };
         for (size_t i = 0; i < expected.size(); ++i) Write(expected[i], std::string(4097 + i * 17, char('a' + i)), old);
+        expected.push_back(temp/L"zero.tmp"); Write(expected.back(), "", old);
+        expected.push_back(temp/L"resident.tmp"); Write(expected.back(), "tiny", old);
         Write(temp/L"recent.tmp", "recent", now);
         Write(temp/L"new-created.tmp", "created recently", old); Age(temp/L"new-created.tmp", now, old);
         Write(temp/L"new-written.tmp", "written recently", old); Age(temp/L"new-written.tmp", old, now);
@@ -97,6 +110,9 @@ int wmain(int argc, wchar_t** argv)
         auto result = Cleanup::Scan(options);
         Check(!result.incomplete && !result.cancelled, "Normal preview is complete");
         Check(result.candidates.size() == expected.size(), "Only audited old temporary/cache payloads are candidates");
+        for (const auto& category : result.coverage)
+            Check(category.state == Cleanup::CoverageState::Matches && category.rootsFound == 1 && category.failures == 0,
+                "Each audited category reports an existing exact cache root and matching candidates");
         for (const auto& path : expected) Check(Has(result, path), "Expected precise whitelist payload found");
         std::uint64_t count = 0, allocation = 0;
         for (const auto& category : result.categories) { count += category.files; allocation += category.allocatedBytes; }
@@ -104,14 +120,15 @@ int wmain(int argc, wchar_t** argv)
         std::uint64_t candidateAllocation = 0;
         for (const auto& item : result.candidates) {
             Check(!item.ruleId.empty() && !item.reasonKey.empty() && item.ruleVersion != 0, "Candidate has versioned matching reason");
-            Check(item.logicalBytes > 0 && item.allocatedBytes >= item.logicalBytes, "Ordinary file exposes allocation separately from logical bytes");
+            Check(item.allocatedBytes == Allocation(item.path), "Candidate allocation matches filesystem metadata including resident and empty files");
             candidateAllocation += item.allocatedBytes;
         }
         Check(candidateAllocation == allocation, "Category allocation equals unique candidate allocation");
         Check(Snapshot(root) == before, "Read-only preview preserves all source bytes and paths");
         auto restricted = options; restricted.enabled.fill(false); restricted.enabled[0] = true;
         auto onlyTemp = Cleanup::Scan(restricted);
-        Check(onlyTemp.candidates.size() == 2, "Category selection limits scanning");
+        Check(onlyTemp.candidates.size() == 4, "Category selection limits scanning");
+        Check(onlyTemp.coverage[1].state == Cleanup::CoverageState::Disabled, "Disabled categories do not claim to be missing");
         restricted.enabled.fill(false);
         Check(Cleanup::Scan(restricted).candidates.empty(), "No categories yields no candidates");
         Write(temp/L"excluded/item.tmp", "excluded", old);
@@ -123,6 +140,44 @@ int wmain(int argc, wchar_t** argv)
         restricted = options; restricted.protectedDirectories = { temp.wstring() };
         result = Cleanup::Scan(restricted);
         Check(!Has(result, temp/L"old.tmp") && Has(result, expected[2]), "Protected roots override a matching rule without hiding other categories");
+        Check(result.coverage[0].state == Cleanup::CoverageState::Skipped, "Excluded roots do not claim there are no matching files");
+        const auto emptyLocal = root/L"EmptyLocalAppData";
+        fs::create_directories(emptyLocal);
+        restricted = options; restricted.localAppData = emptyLocal.wstring();
+        result = Cleanup::Scan(restricted);
+        for (const auto& category : result.coverage)
+            Check(category.state == Cleanup::CoverageState::Missing && category.missingRoots == 1,
+                "Missing audited directories are distinct from an empty scan");
+        for (const auto& relative : { L"Temp", L"Google/Chrome/User Data/Default/Cache/Cache_Data",
+            L"Microsoft/Edge/User Data/Profile 2/Cache/Cache_Data", L"Mozilla/Firefox/Profiles/empty.default/cache2/entries", L"pip/Cache/http-v2" })
+            fs::create_directories(emptyLocal/relative);
+        Write(emptyLocal/L"Temp/recent.tmp", "recent", now);
+        result = Cleanup::Scan(restricted);
+        for (const auto& category : result.coverage)
+            Check(category.state == Cleanup::CoverageState::NoMatches && category.rootsFound == 1 && category.failures == 0,
+                "Existing empty or ineligible cache roots report no matching files without scan failure");
+        Write(temp/L"locked.tmp", "locked metadata", old);
+        const auto deniedPath = temp/L"locked.tmp";
+        DWORD securitySize = 0;
+        GetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION, nullptr, 0, &securitySize);
+        std::vector<BYTE> security(securitySize);
+        Check(securitySize != 0 && GetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION,
+            security.data(), securitySize, &securitySize), "Synthetic file permissions saved");
+        SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision = 0;
+        Check(GetSecurityDescriptorControl(security.data(), &control, &revision) != 0, "Synthetic DACL inheritance state saved");
+        PSECURITY_DESCRIPTOR denied = nullptr;
+        Check(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(D;;0x80;;;WD)(A;;FA;;;WD)",
+            SDDL_REVISION_1, &denied, nullptr) != 0, "Synthetic metadata denial descriptor prepared");
+        const bool applied = SetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, denied) != 0;
+        LocalFree(denied);
+        Check(applied, "Metadata access denied only on the synthetic file");
+        const auto restore = [&]() { return SetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION |
+            ((control & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION), security.data()) != 0; };
+        try { result = Cleanup::Scan(options); }
+        catch (...) { restore(); throw; }
+        Check(restore(), "Synthetic file permissions restored");
+        Check(result.incomplete && result.failures != 0 && result.coverage[0].failures != 0 &&
+            result.coverage[0].state == Cleanup::CoverageState::Partial, "Unreadable candidate metadata reports partial failure instead of silently reporting zero");
         std::wstring normalized, error;
         Check(!Cleanup::NormalizeDirectory(L"Temp", normalized, error), "Relative exclusion is rejected");
         Check(!Cleanup::NormalizeDirectory(L"C:\\", normalized, error), "Volume root is rejected");
@@ -132,11 +187,15 @@ int wmain(int argc, wchar_t** argv)
         restricted = options; restricted.maximumCandidates = 1;
         result = Cleanup::Scan(restricted);
         Check(result.limitReached && result.incomplete && result.candidates.size() == 1, "Candidate limit is an explicitly incomplete preview");
+        Check(result.coverage[0].state == Cleanup::CoverageState::Partial && result.coverage[1].state == Cleanup::CoverageState::NotScanned,
+            "Limit distinguishes interrupted category from categories not scanned");
         std::stop_source stop;
         result = Cleanup::Scan(options, stop.get_token(), [&](const Cleanup::Progress& progress) {
             if (progress.checkedFiles >= 1) stop.request_stop();
         });
         Check(result.cancelled && result.incomplete, "Cancellation never reports a complete preview");
+        Check(result.coverage[0].state == Cleanup::CoverageState::Partial && result.coverage[1].state == Cleanup::CoverageState::NotScanned,
+            "Cancellation does not label unscanned cache directories as missing");
         Write(temp/L"stream.tmp", "stream payload", old);
         { std::ofstream stream(temp/L"stream.tmp:user-data", std::ios::binary); stream << "personal stream"; }
         Write(temp/L"hardlink.tmp", "hardlink payload", old);
@@ -153,6 +212,7 @@ int wmain(int argc, wchar_t** argv)
         Junction(restricted.localAppData, local);
         result = Cleanup::Scan(restricted);
         Check(result.candidates.empty() && result.incomplete, "An ancestor junction cannot redirect the cache anchor");
+        Check(result.coverage[0].state == Cleanup::CoverageState::Failed, "Unverifiable anchor reports failure for enabled categories");
         Check(Snapshot(outside).size() == 1, "Outside sentinel remains intact");
         std::cout << "{\"status\":\"PASS\",\"checks\":" << checks << "}" << std::endl;
         return 0;

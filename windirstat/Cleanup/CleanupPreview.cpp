@@ -192,11 +192,22 @@ namespace Cleanup
         const std::function<void(const Progress&)>& progress)
     {
         ScanResult result;
+        for (size_t i = 0; i < CategoryCount; ++i)
+            if (!options.enabled[i]) result.coverage[i].state = CoverageState::Disabled;
+        CategoryCoverage* coverage = nullptr;
+        std::array<bool, CategoryCount> scannedRoots{};
+        std::array<bool, CategoryCount> interrupted{};
         std::wstring anchor, error;
         const auto warn = [&](const std::wstring& path, const std::wstring& reason, bool resourceKey = false)
         {
             result.incomplete = true;
             ++result.failures;
+            if (coverage != nullptr) ++coverage->failures;
+            else for (size_t i = 0; i < CategoryCount; ++i) if (options.enabled[i])
+            {
+                result.coverage[i].state = CoverageState::Failed;
+                ++result.coverage[i].failures;
+            }
             if (result.warnings.size() < 100) result.warnings.push_back({ path, reason, resourceKey });
         };
         if (!NormalizeDirectory(options.localAppData, anchor, error) || !HasSafeAncestors(anchor))
@@ -226,17 +237,29 @@ namespace Cleanup
             return std::ranges::any_of(excluded, [&](const auto& item) { return IsWithin(path, item); }) ||
                 std::ranges::any_of(protectedPaths, [&](const auto& item) { return IsWithin(path, item); });
         };
-        if (blocked(anchor)) { ++result.skipped[static_cast<size_t>(SkipReason::Excluded)]; return result; }
+        if (blocked(anchor))
+        {
+            ++result.skipped[static_cast<size_t>(SkipReason::Excluded)];
+            for (size_t i = 0; i < CategoryCount; ++i) if (options.enabled[i])
+            { result.coverage[i].state = CoverageState::Skipped; ++result.coverage[i].skipped; }
+            return result;
+        }
         FILETIME current{};
         GetSystemTimeAsFileTime(&current);
         const auto now = options.now == 0 ? Ticks(current) : options.now;
         std::unordered_set<std::wstring> identities;
         const auto cancelled = [&]() { if (stop.stop_requested()) { result.cancelled = true; result.incomplete = true; } return result.cancelled; };
-        const auto skipped = [&](SkipReason reason) { ++result.skipped[static_cast<size_t>(reason)]; };
+        const auto skipped = [&](SkipReason reason)
+        {
+            ++result.skipped[static_cast<size_t>(reason)];
+            if (coverage != nullptr) ++coverage->skipped;
+        };
         for (const auto& rule : Rules())
         {
             const auto index = static_cast<size_t>(rule.category);
             if (!options.enabled[index] || cancelled() || result.limitReached) continue;
+            coverage = &result.coverage[index];
+            coverage->state = CoverageState::Missing;
             std::vector<std::wstring> roots;
             const std::wstring base = anchor + L"\\" + rule.relativeRoot;
             if (blocked(base)) { skipped(SkipReason::Excluded); continue; }
@@ -245,6 +268,7 @@ namespace Cleanup
             {
                 const DWORD code = GetLastError();
                 if (code != ERROR_FILE_NOT_FOUND && code != ERROR_PATH_NOT_FOUND) warn(base, SystemError(code));
+                else ++coverage->missingRoots;
                 continue;
             }
             if (!HasSafeAncestors(base) || !(baseAttributes & FILE_ATTRIBUTE_DIRECTORY))
@@ -254,16 +278,24 @@ namespace Cleanup
                 WIN32_FIND_DATAW entry{};
                 const HANDLE search = FindFirstFileExW(Extended(base + L"\\*").c_str(), FindExInfoBasic,
                     &entry, FindExSearchNameMatch, nullptr, 0);
-                if (search == INVALID_HANDLE_VALUE) { warn(base, SystemError(GetLastError())); continue; }
+                if (search == INVALID_HANDLE_VALUE)
+                {
+                    const DWORD code = GetLastError();
+                    if (code != ERROR_FILE_NOT_FOUND) warn(base, SystemError(code));
+                    else ++coverage->missingRoots;
+                    continue;
+                }
                 bool more = true;
                 do
                 {
                     const std::wstring name = entry.cFileName;
                     if (name != L"." && name != L".." && (entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
-                        !(entry.dwFileAttributes & UnsafeAttributes) &&
                         (rule.category == Category::Firefox || DefaultProfile(name)))
-                        roots.push_back(base + L"\\" + name + (rule.category == Category::Firefox ?
+                    {
+                        if (entry.dwFileAttributes & UnsafeAttributes) skipped(SkipReason::Unsafe);
+                        else roots.push_back(base + L"\\" + name + (rule.category == Category::Firefox ?
                             L"\\cache2\\entries" : L"\\Cache\\Cache_Data"));
+                    }
                     if (cancelled()) break;
                     more = FindNextFileW(search, &entry) != false;
                 } while (more);
@@ -280,8 +312,10 @@ namespace Cleanup
                 {
                     const DWORD code = GetLastError();
                     if (code != ERROR_FILE_NOT_FOUND && code != ERROR_PATH_NOT_FOUND) warn(root, SystemError(code));
+                    else ++coverage->missingRoots;
                     continue;
                 }
+                if (attributes & FILE_ATTRIBUTE_DIRECTORY) ++coverage->rootsFound;
                 if (blocked(root)) { skipped(SkipReason::Excluded); continue; }
                 if (!HasSafeAncestors(root) || !(attributes & FILE_ATTRIBUTE_DIRECTORY)) { skipped(SkipReason::Unsafe); continue; }
                 std::vector<std::pair<std::wstring, unsigned>> pending{ { root, 0 } };
@@ -297,6 +331,7 @@ namespace Cleanup
                     if (dir.value == INVALID_HANDLE_VALUE || !FinalPath(dir.value, finalDirectory) ||
                         !IsWithin(finalDirectory, root) || blocked(finalDirectory))
                     { warn(directory, L"IDS_CP_WARN_VERIFY", true); continue; }
+                    scannedRoots[index] = true;
                     if (progress) progress({ rule.category, result.checkedFiles, result.candidates.size(), directory });
                     WIN32_FIND_DATAW entry{};
                     const HANDLE search = FindFirstFileExW(Extended(directory + L"\\*").c_str(), FindExInfoBasic,
@@ -323,6 +358,7 @@ namespace Cleanup
                             else
                             {
                                 ++result.checkedFiles;
+                                ++coverage->checkedFiles;
                                 if (blocked(path)) skipped(SkipReason::Excluded);
                                 else if (entry.dwFileAttributes & (FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE | FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_SYSTEM)) skipped(SkipReason::Unsafe);
                                 else
@@ -342,11 +378,17 @@ namespace Cleanup
                                         FILE_BASIC_INFO basic{};
                                         BY_HANDLE_FILE_INFORMATION identity{};
                                         std::wstring final;
-                                        if (file.value == INVALID_HANDLE_VALUE ||
-                                            !GetFileInformationByHandleEx(file.value, FileStandardInfo, &standard, sizeof(standard)) ||
-                                            !GetFileInformationByHandleEx(file.value, FileBasicInfo, &basic, sizeof(basic)) ||
-                                            !GetFileInformationByHandle(file.value, &identity) ||
-                                            !FinalPath(file.value, final) || !IsWithin(final, root) || blocked(final) ||
+                                        const bool metadataRead = file.value != INVALID_HANDLE_VALUE &&
+                                            GetFileInformationByHandleEx(file.value, FileStandardInfo, &standard, sizeof(standard)) &&
+                                            GetFileInformationByHandleEx(file.value, FileBasicInfo, &basic, sizeof(basic)) &&
+                                            GetFileInformationByHandle(file.value, &identity) && FinalPath(file.value, final);
+                                        if (!metadataRead)
+                                        {
+                                            warn(path, L"IDS_CP_WARN_VERIFY", true);
+                                            skipped(SkipReason::Metadata);
+                                        }
+                                        else if (
+                                            !IsWithin(final, root) || blocked(final) ||
                                             (basic.FileAttributes & (UnsafeAttributes | FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_SPARSE_FILE | FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_SYSTEM)) ||
                                             standard.Directory || standard.DeletePending || standard.AllocationSize.QuadPart < 0 || standard.EndOfFile.QuadPart < 0)
                                             skipped(SkipReason::Metadata);
@@ -356,11 +398,14 @@ namespace Cleanup
                                             WIN32_FIND_STREAM_DATA stream{};
                                             const HANDLE streams = FindFirstStreamW(Extended(path).c_str(), FindStreamInfoStandard, &stream, 0);
                                             bool safeStreams = streams != INVALID_HANDLE_VALUE;
+                                            if (!safeStreams) warn(path, SystemError(GetLastError()));
                                             if (safeStreams)
                                             {
                                                 do { if (std::wstring(stream.cStreamName) != L"::$DATA") safeStreams = false; }
                                                 while (FindNextStreamW(streams, &stream));
-                                                safeStreams = safeStreams && GetLastError() == ERROR_HANDLE_EOF;
+                                                const DWORD streamCode = GetLastError();
+                                                safeStreams = safeStreams && streamCode == ERROR_HANDLE_EOF;
+                                                if (streamCode != ERROR_HANDLE_EOF) warn(path, SystemError(streamCode));
                                                 FindClose(streams);
                                             }
                                             if (!safeStreams) skipped(SkipReason::Streams);
@@ -368,8 +413,10 @@ namespace Cleanup
                                             {
                                                 FILE_STANDARD_INFO after{};
                                                 FILE_BASIC_INFO afterBasic{};
-                                                if (!GetFileInformationByHandleEx(file.value, FileStandardInfo, &after, sizeof(after)) ||
-                                                    !GetFileInformationByHandleEx(file.value, FileBasicInfo, &afterBasic, sizeof(afterBasic)) ||
+                                                const bool reread = GetFileInformationByHandleEx(file.value, FileStandardInfo, &after, sizeof(after)) &&
+                                                    GetFileInformationByHandleEx(file.value, FileBasicInfo, &afterBasic, sizeof(afterBasic));
+                                                if (!reread) warn(path, L"IDS_CP_WARN_VERIFY", true);
+                                                if (!reread ||
                                                     after.EndOfFile.QuadPart != standard.EndOfFile.QuadPart || after.AllocationSize.QuadPart != standard.AllocationSize.QuadPart ||
                                                     afterBasic.LastWriteTime.QuadPart != basic.LastWriteTime.QuadPart ||
                                                     afterBasic.CreationTime.QuadPart != basic.CreationTime.QuadPart ||
@@ -414,6 +461,18 @@ namespace Cleanup
                     if (!more && code != ERROR_NO_MORE_FILES) warn(directory, SystemError(code));
                 }
             }
+            interrupted[index] = result.cancelled || result.limitReached;
+        }
+        for (size_t i = 0; i < CategoryCount; ++i)
+        {
+            auto& item = result.coverage[i];
+            if (item.state == CoverageState::Disabled || item.state == CoverageState::NotScanned) continue;
+            if (interrupted[i]) item.state = CoverageState::Partial;
+            else if (item.failures != 0) item.state = scannedRoots[i] ? CoverageState::Partial : CoverageState::Failed;
+            else if (result.categories[i].files != 0) item.state = CoverageState::Matches;
+            else if (scannedRoots[i]) item.state = CoverageState::NoMatches;
+            else if (item.skipped != 0) item.state = CoverageState::Skipped;
+            else item.state = CoverageState::Missing;
         }
         if (progress) progress({ Category::Temporary, result.checkedFiles, result.candidates.size(), L"" });
         return result;

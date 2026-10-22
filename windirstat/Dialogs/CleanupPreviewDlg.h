@@ -25,6 +25,19 @@ private:
     void OnConfigurationChanged();
     void OnCategoryChanged(NMHDR*, LRESULT*);
     void OnFileChanged(NMHDR*, LRESULT*);
+    void OnColumnClick(NMHDR*, LRESULT*);
+    void OnSortSize();
+    void OnFilter();
+    void FillFiles();
+    void OnSize(UINT, int, int);
+    void OnLButtonDown(UINT, CPoint);
+    void OnMouseMove(UINT, CPoint);
+    void OnLButtonUp(UINT, CPoint);
+    void OnCaptureChanged(WindowRef);
+    bool OnSetCursor(WindowRef, UINT, UINT);
+    int SplitterAt(CPoint) const;
+    void LayoutPanes();
+    void OnPaint();
     void OnTimer(UINT_PTR);
     void OnGetMinMaxInfo(MINMAXINFO*);
     void UpdateSummary();
@@ -40,6 +53,15 @@ private:
     Cleanup::ScanOptions m_options;
     Cleanup::ScanResult m_result;
     Cleanup::Progress m_progress;
+    std::vector<size_t> m_visible;
+    std::vector<bool> m_selected;
+    bool m_sortSize = false;
+    bool m_descending = true;
+    bool m_layoutReady = false;
+    int m_categoryDelta = 0;
+    int m_detailDelta = 0;
+    int m_dragging = 0;
+    int m_dragY = 0;
     std::mutex m_mutex;
     std::jthread m_worker;
     std::atomic_bool m_finished = false;
@@ -64,6 +86,16 @@ inline std::span<const RouteEntry> CCleanupPreviewDlg::Routes()
         Route::Control<&OnConfigurationChanged>(EN_CHANGE, IDC_CP_EXCLUSIONS),
         Route::Notify<&OnCategoryChanged>(LVN_ITEMCHANGED, IDC_CP_CATEGORIES),
         Route::Notify<&OnFileChanged>(LVN_ITEMCHANGED, IDC_CP_FILES),
+        Route::Notify<&OnColumnClick>(LVN_COLUMNCLICK, IDC_CP_FILES),
+        Route::Control<&OnSortSize>(BN_CLICKED, IDC_CP_SORT_SIZE),
+        Route::Control<&OnFilter>(BN_CLICKED, IDC_CP_HIDE_ZERO),
+        Route::Window<&OnSize>(WM_SIZE),
+        Route::Window<&OnPaint>(WM_PAINT),
+        Route::Window<&OnLButtonDown>(WM_LBUTTONDOWN),
+        Route::Window<&OnMouseMove>(WM_MOUSEMOVE),
+        Route::Window<&OnLButtonUp>(WM_LBUTTONUP),
+        Route::Window<&OnCaptureChanged>(WM_CAPTURECHANGED),
+        Route::Window<&OnSetCursor>(WM_SETCURSOR),
         Route::Window<&OnTimer>(WM_TIMER),
         Route::Window<&OnGetMinMaxInfo>(WM_GETMINMAXINFO),
         Route::Window<&OnCancel>(WM_CLOSE),
