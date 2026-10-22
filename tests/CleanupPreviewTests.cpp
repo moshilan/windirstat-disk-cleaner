@@ -156,8 +156,10 @@ int wmain(int argc, wchar_t** argv)
         for (const auto& category : result.coverage)
             Check(category.state == Cleanup::CoverageState::NoMatches && category.rootsFound == 1 && category.failures == 0,
                 "Existing empty or ineligible cache roots report no matching files without scan failure");
-        Write(temp/L"locked.tmp", "locked metadata", old);
-        const auto deniedPath = temp/L"locked.tmp";
+        // A file's attributes may remain readable through its parent directory.
+        // Deny directory enumeration to create a deterministic read failure.
+        const auto deniedPath = temp/L"blocked";
+        Write(deniedPath/L"private.tmp", "blocked directory payload", old);
         DWORD securitySize = 0;
         GetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION, nullptr, 0, &securitySize);
         std::vector<BYTE> security(securitySize);
@@ -166,18 +168,18 @@ int wmain(int argc, wchar_t** argv)
         SECURITY_DESCRIPTOR_CONTROL control{}; DWORD revision = 0;
         Check(GetSecurityDescriptorControl(security.data(), &control, &revision) != 0, "Synthetic DACL inheritance state saved");
         PSECURITY_DESCRIPTOR denied = nullptr;
-        Check(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(D;;0x80;;;WD)(A;;FA;;;WD)",
-            SDDL_REVISION_1, &denied, nullptr) != 0, "Synthetic metadata denial descriptor prepared");
+        Check(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(D;;0x1;;;WD)(A;;FA;;;WD)",
+            SDDL_REVISION_1, &denied, nullptr) != 0, "Synthetic directory enumeration denial descriptor prepared");
         const bool applied = SetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, denied) != 0;
         LocalFree(denied);
-        Check(applied, "Metadata access denied only on the synthetic file");
+        Check(applied, "Enumeration access denied only on the synthetic directory");
         const auto restore = [&]() { return SetFileSecurityW(deniedPath.c_str(), DACL_SECURITY_INFORMATION |
             ((control & SE_DACL_PROTECTED) ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION), security.data()) != 0; };
         try { result = Cleanup::Scan(options); }
         catch (...) { restore(); throw; }
-        Check(restore(), "Synthetic file permissions restored");
+        Check(restore(), "Synthetic directory permissions restored");
         Check(result.incomplete && result.failures != 0 && result.coverage[0].failures != 0 &&
-            result.coverage[0].state == Cleanup::CoverageState::Partial, "Unreadable candidate metadata reports partial failure instead of silently reporting zero");
+            result.coverage[0].state == Cleanup::CoverageState::Partial, "Unreadable candidate directory reports partial failure instead of silently reporting zero");
         std::wstring normalized, error;
         Check(!Cleanup::NormalizeDirectory(L"Temp", normalized, error), "Relative exclusion is rejected");
         Check(!Cleanup::NormalizeDirectory(L"C:\\", normalized, error), "Volume root is rejected");
