@@ -33,6 +33,14 @@ function Set-CleanupExclusions {
         ((0x0300 -shl 16) -bor (Get-ResourceId 'IDC_CP_EXCLUSIONS')), $edit.ToInt64())
 }
 
+function Get-CleanupAccessRules {
+    param($Acl)
+    return @($Acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) | ForEach-Object {
+        '{0}|{1}|{2}|{3}|{4}|{5}' -f $_.IdentityReference.Value, [long]$_.FileSystemRights,
+            $_.AccessControlType, $_.InheritanceFlags, $_.PropagationFlags, $_.IsInherited
+    } | Sort-Object)
+}
+
 function Test-CleanupPreview {
     param($Context, $Case)
     $root = $Context.Fixture
@@ -157,7 +165,14 @@ function Test-CleanupPreview {
     $state = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_STATUS'))
     Assert-True ($state -match 'incomplete|不完整') 'Read failures do not report a complete preview'
     Set-Acl -LiteralPath $blocked -AclObject $acl
-    Assert-Equal (Get-Acl -LiteralPath $blocked).Sddl $acl.Sddl 'Synthetic directory permissions are restored exactly'
+    $restored = Get-Acl -LiteralPath $blocked
+    Assert-Equal ($restored.GetOwner([Security.Principal.SecurityIdentifier]).Value) `
+        ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value) 'The synthetic directory owner is restored'
+    Assert-Equal ($restored.GetGroup([Security.Principal.SecurityIdentifier]).Value) `
+        ($acl.GetGroup([Security.Principal.SecurityIdentifier]).Value) 'The synthetic directory group is restored'
+    Assert-Equal $restored.AreAccessRulesProtected $acl.AreAccessRulesProtected 'Directory inheritance protection is restored'
+    Assert-Sequence (Get-CleanupAccessRules $restored) (Get-CleanupAccessRules $acl) `
+        'Every access rule is restored, including rights, inheritance and deny state'
 
     # Zero-byte metadata workload permits reliable cancellation without large disk writes.
     for ($index = 0; $index -lt 2000; ++$index) {
