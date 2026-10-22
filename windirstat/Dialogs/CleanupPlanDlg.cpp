@@ -156,7 +156,7 @@ void CCleanupPlanDlg::OnStop()
 void CCleanupPlanDlg::OnCancel()
 {
     if (m_busy) { m_closePending = true; OnStop(); return; }
-    KillTimer(1);
+    ::KillTimer(Handle(), 1);
     CLayoutDialog::OnCancel();
 }
 void CCleanupPlanDlg::OnTimer(UINT_PTR)
