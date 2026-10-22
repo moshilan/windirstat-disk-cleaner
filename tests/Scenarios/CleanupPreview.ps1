@@ -98,6 +98,9 @@ function Click-CleanupFilter {
 function Resize-CleanupByPointer {
     param([IntPtr] $Dialog)
     $rect = [TestDesktop]::Rectangle($Dialog)
+    $minimum = [TestDesktop]::MinimumTrackSize($Dialog)
+    Assert-True ($minimum[0] -lt $rect[2] - $rect[0] -and $minimum[1] -lt $rect[3] - $rect[1]) `
+        "Native minimum size $($minimum -join 'x') leaves shrink room inside $($rect[2] - $rect[0])x$($rect[3] - $rect[1])"
     $midX = [int](($rect[0] + $rect[2]) / 2)
     $midY = [int](($rect[1] + $rect[3]) / 2)
     $edges = @(
@@ -113,15 +116,18 @@ function Resize-CleanupByPointer {
             'Each window edge and corner exposes its native sizing hit region'
         [TestDesktop]::Activate($Dialog)
         [TestDesktop]::MoveCursor($x, $y)
+        Assert-Equal ([TestDesktop]::WindowAt($x, $y)) $Dialog 'The native sizing pointer really reaches the preview window'
         [TestDesktop]::LeftButton($true)
         try {
+            Wait-Until { [TestDesktop]::CaptureOwner($Dialog) -eq $Dialog } `
+                'A native frame press enters the system sizing loop' -Seconds 5 | Out-Null
             Start-Sleep -Milliseconds 150
             [TestDesktop]::MoveCursor($x + $dx, $y + $dy)
             Wait-Until {
                 $current = [TestDesktop]::Rectangle($Dialog)
                 ($dx -eq 0 -or $current[2] - $current[0] -lt $rect[2] - $rect[0]) -and
                     ($dy -eq 0 -or $current[3] - $current[1] -lt $rect[3] - $rect[1])
-            } 'A real edge or corner drag can shrink the initial preview' -StableMilliseconds 150 | Out-Null
+            } 'A real edge or corner drag can shrink the initial preview' -Seconds 10 -StableMilliseconds 150 | Out-Null
         } finally { [TestDesktop]::LeftButton($false) }
         Wait-Until { [TestDesktop]::CaptureOwner($Dialog) -eq [IntPtr]::Zero } 'The native sizing loop ends after release' | Out-Null
         [TestDesktop]::Position($Dialog, $rect[0], $rect[1], $rect[2] - $rect[0], $rect[3] - $rect[1])
@@ -151,7 +157,10 @@ function Test-CleanupPreview {
     New-CleanupFixtureFile (Join-Path $local 'Google\Chrome\User Data\Default\Service Worker\CacheStorage\personal') | Out-Null
     New-CleanupFixtureFile (Join-Path $local 'pip\Cache\wheels\package.whl') | Out-Null
     $before = @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash)
-    $runner = New-TestRunner @{ Options = @{ LanguageId = $Case.Language; FontSizePercent = $Case.FontSize } }
+    $desktop = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $fontSize = if ($Case.FontSize -eq 200 -and ($desktop.Width -lt 2000 -or $desktop.Height -lt 1600)) { 100 } else { $Case.FontSize }
+    Write-TestNote "Native resize desktop: $($desktop.Width)x$($desktop.Height); font=$fontSize%"
+    $runner = New-TestRunner @{ Options = @{ LanguageId = $Case.Language; FontSizePercent = $fontSize } }
     $runner | Add-Member -NotePropertyName Environment -NotePropertyValue @{ WDS_CLEANUP_TEST_ROOT = $root }
     $app = Start-TestApp -Runner $runner
     $selection = Wait-Until { Get-AppDialog $app 'IDC_SCAN_DUPLICATES' } 'Initial target selection is cancelled without scanning any disk'
