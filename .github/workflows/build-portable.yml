@@ -88,7 +88,8 @@ jobs:
           & $env:MSBUILD_EXE tests/NuGetHttpCacheTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/nuget-http-tests-build.log;verbosity=normal'
           if ($LASTEXITCODE -ne 0) { throw 'NuGet HTTP test build failed.' }
           if ('${{ inputs.verification }}' -eq 'pip-cache') {
-            $python = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+            $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+            "WDS_TEST_PYTHON=$python" >> $env:GITHUB_ENV
             $withoutPip = Join-Path $env:RUNNER_TEMP ('WinDirStatTests-PipEnvironment-' + [guid]::NewGuid().ToString('N'))
             & $python -I -B -m venv --without-pip $withoutPip
             if ($LASTEXITCODE -ne 0) { throw 'Unable to create the isolated no-pip test environment without installation.' }

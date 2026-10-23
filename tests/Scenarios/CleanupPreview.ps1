@@ -378,7 +378,10 @@ function Test-CleanupPreview {
         $runner.Environment.NUGET_PLUGINS_CACHE_PATH = Join-Path $root 'plugins'
     }
     if ($Case.ContainsKey('PipTools')) {
-        $runner.Environment.WDS_PIP_TEST_PYTHON = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+        if (-not $env:WDS_TEST_PYTHON -or -not [IO.Path]::IsPathFullyQualified($env:WDS_TEST_PYTHON)) {
+            throw 'Pip GUI tests require one explicitly selected WDS_TEST_PYTHON interpreter.'
+        }
+        $runner.Environment.WDS_PIP_TEST_PYTHON = $env:WDS_TEST_PYTHON
         $runner.Environment.PIP_CACHE_DIR = Join-Path $root 'PipCache'
         $runner.Environment.PIP_CONFIG_FILE = 'NUL'
     }

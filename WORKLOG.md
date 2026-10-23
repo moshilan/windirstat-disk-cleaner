@@ -412,3 +412,7 @@
 - pip官方缓存清理接入现有NuGet机制：独立入口明确选择python.exe，隔离模式核对Python/pip身份和实际缓存，固定解释器/缓存根/日志位置。仅标准本地缓存或markedfixture，配置/关键环境变化、排除冲突及不明范围拒绝，不安装依赖或调用自研删除器。
 - 沿用原后端句柄/排除/Job取消/前后测量及同一确认结果窗，不新增安全框架。HTTP/http-v2/wheel合成测试复用原native项目及双语GUI helper；正常保留非cache哨兵，测试缺pip不跳环境、配置/排除变化和失败取消。工作流pip-cache模式同时回归NuGet；新建no-pip venv不安装pip。
 - 安全与UX首轮审查通过；修正pip提示与共用断言匹配。PS/YAML/双语格式静态检查及本机仅只读cache-dir探针通过，无本机purge/GUI；云端编译和实际合成清理尚待验证。官方后代路径竞态、所选环境可信性保留限制。
+
+## 2026-10-24 04:27
+- 首次pip云端40018693387：主程序/核心/官方后端测试均编译通过，0警告/0错误，核心493通过；随后CI的Get-Command返回真实Python与WindowsApps别名两项，Source数组被当成一个命令，未创建venv或执行缓存清理测试。GUI和打包跳过，失败证据保留.local/cloud-build/40018693387。
+- 修正CI只显式选定一个解释器，并通过WDS_TEST_PYTHON传给后端与GUI测试；测试fixture不再自行重新发现环境。未改生产安全范围或增加任何回退，待重跑实测。
