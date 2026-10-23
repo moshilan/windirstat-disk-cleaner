@@ -324,3 +324,9 @@
 - 下载记录Artifact12476237627，摘要55ae60f1f8903b5a66be8d9a3cbf0036a620568770753707c5075193518d177e；便携Artifact12476172862，摘要f075fe4e97d60fdd8e39ba5784a1f8dd31ad119b10fb5e807ec29f6f9456dc32，均与API匹配。EXE2.10.0.2219、3290624字节，SHA256为fd0f0d559e4a9d1edb6b3b427fdbfa4a0295cffbaf86ed5faa410e741c0e5578匹配清单，依赖仅系统DLL。证据.local/cloud-build/39894584072，实验EXE未打入便携包，本机不另跑GUI或真实回收。
 - 新代码仅tests独立原型及实验，现有windirstat源码、扫描/缓存规则、GUI入口和旧测试diff为空。当前实证证明即使固定祖先且PreDeleteItem核验旧ID，Shell仍可能回收CREATE_NEW的同名新对象；安全计划始终BindingUnavailable，readyForRealFiles=false，绝不以实验成功解除阻断。
 - 没有处理真实用户文件、修改ACL、取得所有权、提权、永久删除或失败回退。本轮未重复旧模拟/GUI全集。正式流程仍缺少有保证的原子身份绑定、保护/规则提交点一致性、持久化操作日志、崩溃未知态及取消对账；当前不具备正式接入条件。源码已推送，最终证据文档checkpoint仅本地保存，检查diff/status后停止。
+
+## 2026-10-23 11:54
+
+- 新轮仅评估按文件句柄同卷隔离，正式清理阻断不解除。新增独立HandleIsolationTests与现有标准Runner的handle-isolation选项，不链接GUI、不动扫描/缓存规则、不调用Shell、永久删除、ACL写或提权。
+- 源凭据从CREATE_NEW/ReOpenFile取得完整128位ID；FileRenameInfo始终不覆盖，Rooted传持有目标目录句柄及单段名，无全路径失败回退。本机纯合成探针即使加入FILE_TRAVERSE仍返回87、源保持，与当前微软文档需云端交叉复验。
+- 全路径仅独立新样本的显式接口对照，待测源同名替换、目标/恢复冲突、正常恢复、强目标共享冲突、占用、受限权限、重解析变更和中断核对。中断仅关闭句柄重开，保留内存身份，不冒充真实崩溃或持久化恢复。补记同卷不释放空间及后续处置门槛；当前尚未编译运行，不记通过。独立安全审查未见阻碍，实际行为待云端验证。
