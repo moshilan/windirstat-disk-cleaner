@@ -43,7 +43,7 @@ function Test-NuGetHttpFlow {
         $details = [TestDesktop]::ControlText($detailsControl)
         $statusControl = Get-DialogControl $dialog 'IDC_NH_STATUS'
         Assert-True ([TestDesktop]::IsWindowEnabled($clear)) ('Installed SDK and isolated scope are usable: ' + $details)
-        Assert-True ($details.Contains($http) -and $details.Contains($command)) 'Actual official scope and fixed command are displayed'
+        Assert-True ($details.IndexOf($http, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $details.Contains($command)) 'Actual official scope and fixed command are displayed'
         $notice = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_NH_NOTICE'))
         Assert-True ($notice -match 'ENTIRE|整个|全量') 'The entire HTTP cache scope is explicit'
         Assert-True ($notice -match 'unchecked|未勾选') 'Official cleanup is independent of preview selection'
@@ -58,7 +58,7 @@ function Test-NuGetHttpFlow {
             $prompt = Wait-Until { Get-CleanupWindowsPrompt $App $Preview } 'Official cleanup requires a separate confirmation'
             Assert-Equal ([TestDesktop]::Message($prompt, 0x0400).ToInt32() -band 0xFFFF) 2 'Cancel is the default action before actual cleanup'
             $text = @([TestDesktop]::Children($prompt) | ForEach-Object { [TestDesktop]::ControlText($_) }) -join "`n"
-            Assert-True ($text.Contains($http) -and $text -match 'Recycle Bin|回收站') 'Confirmation names the actual cache and lack of Recycle Bin recovery'
+            Assert-True ($text.IndexOf($http, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $text -match 'Recycle Bin|回收站') 'Confirmation names the actual cache and lack of Recycle Bin recovery'
             Close-AppDialog $prompt
             Wait-Until { [TestDesktop]::IsWindowEnabled($dialog) } 'Cancelling returns to scope review' | Out-Null
             Wait-Until { [TestDesktop]::ControlText($statusControl) -match 'Confirmation cancelled|已取消确认' } 'Pre-start cancellation is reported' | Out-Null
