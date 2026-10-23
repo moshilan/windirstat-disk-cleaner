@@ -6,7 +6,7 @@ on:
       verification:
         description: Verification suite (experiments use only self-created synthetic files)
         type: choice
-        options: [full, recycle-experiment, handle-isolation]
+        options: [full, recycle-experiment, handle-isolation, handle-delete]
         default: full
 
 permissions:
@@ -118,6 +118,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Handle isolation experiment build failed.' }
           & intermediate/handle-isolation/HandleIsolationTests.exe | Tee-Object -FilePath artifacts/records/handle-isolation.jsonl
           if ($LASTEXITCODE -ne 0) { throw 'Isolated handle rename experiment failed.' }
+
+      - name: Verify irreversible handle disposition on self-created synthetic files only
+        if: inputs.verification == 'handle-delete'
+        run: |
+          & $env:MSBUILD_EXE tests/HandleDeleteTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/handle-delete-build.log;verbosity=normal'
+          if ($LASTEXITCODE -ne 0) { throw 'Handle delete experiment build failed.' }
+          & intermediate/handle-delete/HandleDeleteTests.exe | Tee-Object -FilePath artifacts/records/handle-delete.jsonl
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated handle delete experiment failed.' }
 
       - name: Package portable EXE and licenses
         run: |

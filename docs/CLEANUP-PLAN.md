@@ -86,3 +86,15 @@ AbsoluteControl仅为独立新样本的接口对照，不是Rooted的执行器�
 同卷改名保留原数据和分配，不会立即释放同卷空间，实验释放统计为0且不等同于实际空闲空间测量。后续释放空间只能在另行授权和日志/身份/内容/权限验证完备后，研究对同一个已核验句柄的最终处置，且需确认最后的链接及句柄释放；本轮不实现。跨卷搬移包含复制与删除，不能用作本轮替代；已证实不绑定身份的Shell回收也不能成为隔离后自动步骤。
 
 无论接口对照是否通过，正式计划继续阻断；源绑定成立不等于目标目录绑定、内容稳定或崩溃恢复已成立。实际验证结果见BUILD-BASELINE。
+
+## 自建合成缓存的句柄删除实验（不接入正式执行）
+
+用户另行授权本轮仅处置程序自行创建的合成文件。tests/HandleDeleteTests沿用既有实验的CREATE_NEW凭据、创建对象派生的保留句柄、完整卷号/128位文件ID、逐组件祖先固定与受限令牌模式，独立编译，不链接主程序，也不接受外部路径。既有Shell入口、扫描/缓存规则、GUI和隔离实验不改。
+
+仅采用官方[SetFileInformationByHandle](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle)的FileDispositionInfo，DeleteFile=TRUE。先一次取得GENERIC_READ|DELETE且仅共享READ的句柄，再在同一句柄核对原创身份、最终路径、元数据、单硬链接、默认数据流及祖先身份/非重解析状态；最后一次复核和取消门之后直接设置删除待定，绝不关闭后按名称重开删除。不使用POSIX、忽略只读、清属性、提权、ACL修改、重启删除或失败降级。任一观察到的保护失败均拒绝处置。
+
+实验区分Rejected、Cancelled、MarkedPending、NameAbsent、Unknown。API成功只表示设置待定；保留句柄尚开时不报最终完成，关句柄后观察名称消失也不等于测得空闲空间。普通语义下须最后相关句柄关闭、无剩余链接及文件系统完成回收才可能释放分配；映射、驱动、快照、存储机制及异步回收仍影响时机，不承诺擦除底层数据。本操作不进回收站，提交之后不承诺取消或恢复。统计actualReleasedBytes保持0且spaceMeasured=false。
+
+该实验不构成受限缓存后端的上线验收。依据[CreateFile共享语义](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)，属性/扩展属性访问不受普通共享标志完整约束；末次元数据/链接/流/保护规则观察和提交仍不是原子事务，既有DELETE能力也不自动随之后的ACL变化撤回。实测的文件ID绑定仅解决对象被同名替换的一部分风险。尚未证明应用已停止、载荷未被映射/特权代码改变、缓存确实可再生及配对清理语义；没有持久化提交日志、真实进程崩溃/掉电和未知结果恢复测试，不得自动重放。readyForRealFiles=false，正式执行继续阻断。测试的部分结果仅为2完成+1预检拒绝，不冒充处置API部分失败。
+
+云端实际结果记录在BUILD-BASELINE.md；未运行的场景不记通过。
