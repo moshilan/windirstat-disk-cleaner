@@ -6,7 +6,7 @@ on:
       verification:
         description: Verification suite (experiments use only self-created synthetic files)
         type: choice
-        options: [full, recycle-experiment, handle-isolation, handle-delete, windows-cleanup]
+        options: [full, recycle-experiment, handle-isolation, handle-delete, windows-cleanup, nuget-http]
         default: full
 
 permissions:
@@ -74,7 +74,7 @@ jobs:
         run: ./.github/scripts/Test-SyntheticScan.ps1 -Executable build/WinDirStat_x64.exe -OutputDirectory artifacts/records
 
       - name: Verify restricted read-only cleanup scanner
-        if: inputs.verification == 'full' || inputs.verification == 'windows-cleanup'
+        if: inputs.verification == 'full' || inputs.verification == 'windows-cleanup' || inputs.verification == 'nuget-http'
         run: |
           & $env:MSBUILD_EXE tests/CleanupPreviewTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/cleanup-tests-build.log;verbosity=normal'
           if ($LASTEXITCODE -ne 0) { throw 'Cleanup test executable build failed.' }
@@ -82,12 +82,24 @@ jobs:
           & intermediate/cleanup-tests/CleanupPreviewTests.exe $fixture | Set-Content artifacts/records/cleanup-core.json -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw 'Read-only cleanup scanner regression failed.' }
 
+      - name: Verify official NuGet HTTP cleanup on isolated synthetic caches
+        if: inputs.verification == 'nuget-http'
+        run: |
+          & $env:MSBUILD_EXE tests/NuGetHttpCacheTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/nuget-http-tests-build.log;verbosity=normal'
+          if ($LASTEXITCODE -ne 0) { throw 'NuGet HTTP test build failed.' }
+          & intermediate/nuget-http-tests/NuGetHttpCacheTests.exe | Tee-Object -FilePath artifacts/records/nuget-http.jsonl
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated official NuGet HTTP regression failed.' }
+
       - name: Verify scan policy and measure synthetic workloads
-        if: inputs.verification == 'full' || inputs.verification == 'windows-cleanup'
+        if: inputs.verification == 'full' || inputs.verification == 'windows-cleanup' || inputs.verification == 'nuget-http'
         run: |
           $reportRoot = Join-Path $env:RUNNER_TEMP 'scan-policy-results'
-          # Keep fixtures so the selected tests perform no deletion; the disposable runner owns cleanup.
-          $scenarios = if ('${{ inputs.verification }}' -eq 'windows-cleanup') { 'cleanup.windows,cleanup.windows.zh' } else { 'scan.policy,scan.workloads,fs.empty,fs.access-denied,fs.access-denied.json,scan.outcome.cancelled,cleanup.preview,cleanup.preview.zh' }
+          # Keep fixtures; only the NuGet suite clears its own isolated HTTP cache via the official command.
+          $scenarios = switch ('${{ inputs.verification }}') {
+            'windows-cleanup' { 'cleanup.windows,cleanup.windows.zh' }
+            'nuget-http' { 'cleanup.nuget,cleanup.nuget.zh' }
+            default { 'scan.policy,scan.workloads,fs.empty,fs.access-denied,fs.access-denied.json,scan.outcome.cancelled,cleanup.preview,cleanup.preview.zh' }
+          }
           pwsh -NoProfile -STA -File tests/Test-WinDirStat.ps1 -ExePath build/WinDirStat_x64.exe -Scenario $scenarios -KeepArtifacts -RequireAll -OutputPath $reportRoot
           $testExit = $LASTEXITCODE
           if (Test-Path (Join-Path $reportRoot 'results.json')) {
@@ -95,10 +107,12 @@ jobs:
             $report.Results | Select-Object Id,Status,Checks,Seconds,Notes |
               ConvertTo-Json -Depth 8 | Set-Content artifacts/records/scan-policy.json -Encoding utf8
             # Only synthetic runner UI is copied; never upload raw reports or local screenshots.
-            foreach ($case in $report.Results | Where-Object { $_.Id -in @('cleanup.preview', 'cleanup.preview.zh', 'cleanup.windows', 'cleanup.windows.zh') }) {
-              $screenshot = Join-Path $case.Artifacts 'cleanup-preview.png'
-              if (Test-Path -LiteralPath $screenshot) {
-                Copy-Item -LiteralPath $screenshot -Destination (Join-Path artifacts/records ($case.Id + '.png'))
+            foreach ($case in $report.Results | Where-Object { $_.Id -in @('cleanup.preview', 'cleanup.preview.zh', 'cleanup.windows', 'cleanup.windows.zh', 'cleanup.nuget', 'cleanup.nuget.zh') }) {
+              foreach ($name in @('cleanup-preview','nuget-http-scope','nuget-http-result')) {
+                $screenshot = Join-Path $case.Artifacts ($name + '.png')
+                if (Test-Path -LiteralPath $screenshot) {
+                  Copy-Item -LiteralPath $screenshot -Destination (Join-Path artifacts/records ($case.Id + '.' + $name + '.png'))
+                }
               }
             }
           }

@@ -371,6 +371,12 @@ function Test-CleanupPreview {
     Write-TestNote "Native resize desktop: $($desktop.Width)x$($desktop.Height); font=$fontSize%; full-window-drag=$([System.Windows.Forms.SystemInformation]::DragFullWindows)"
     $runner = New-TestRunner @{ Options = @{ LanguageId = $Case.Language; FontSizePercent = $fontSize; DarkMode = 1 } }
     $runner | Add-Member -NotePropertyName Environment -NotePropertyValue @{ WDS_CLEANUP_TEST_ROOT = $root }
+    if ($Case.ContainsKey('NuGetTools')) {
+        $runner.Environment.NUGET_HTTP_CACHE_PATH = Join-Path $root 'NuGetHttp'
+        $runner.Environment.NUGET_PACKAGES = Join-Path $root 'packages'
+        $runner.Environment.NUGET_SCRATCH = Join-Path $root 'scratch'
+        $runner.Environment.NUGET_PLUGINS_CACHE_PATH = Join-Path $root 'plugins'
+    }
     $app = Start-TestApp -Runner $runner
     $selection = Wait-Until { Get-AppDialog $app 'IDC_SCAN_DUPLICATES' } 'Initial target selection is cancelled without scanning any disk'
     Close-AppDialog $selection
@@ -421,7 +427,7 @@ function Test-CleanupPreview {
     $buttons = @([TestDesktop]::Children($dialog) | Where-Object { [TestDesktop]::Class($_) -eq 'Button' } |
         ForEach-Object { [TestDesktop]::ControlText($_) })
     Assert-True (-not @($buttons | Where-Object { $_ -match '删除|执行清理|Delete|Execute|Clean now' }).Count) `
-        'The preview has no deletion or cleanup execution button'
+        'The preview has no self-managed deletion or plan execution button'
 
     Invoke-CleanupButton $dialog 'IDC_CP_SCAN'
     Wait-CleanupPreviewIdle $dialog
@@ -545,10 +551,15 @@ function Test-CleanupPreview {
         'Full candidate path is available outside clipped columns' | Out-Null
     Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root 'cleanup-preview.png')
 
-    if ($Case.ContainsKey('WindowsTools')) {
-        if ($Case.Language -eq 9) { Test-CleanupWindowsLaunch $app $dialog }
+    if ($Case.ContainsKey('WindowsTools') -or $Case.ContainsKey('NuGetTools')) {
+        if ($Case.ContainsKey('WindowsTools') -and $Case.Language -eq 9) { Test-CleanupWindowsLaunch $app $dialog }
         Assert-Sequence @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash | ForEach-Object Hash) `
             @($before.Hash) 'Windows launch and cancellation leave every synthetic payload unchanged'
+        if ($Case.ContainsKey('NuGetTools')) {
+            Test-NuGetHttpFlow $app $dialog $root $Context
+            Assert-Sequence @($before.Path | Get-FileHash | ForEach-Object Hash) @($before.Hash) `
+                'Official HTTP cleanup leaves all original preview and user-data sentinels unchanged'
+        }
         Close-AppDialog $dialog
         Stop-TestApp $app
         return # Reuse preview/plan/layout coverage above; do not run unrelated later ACL/persistence scenarios.
@@ -791,3 +802,7 @@ Register-Scenario cleanup.windows CleanupPreview 'Windows entry launch/cancel an
     Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 9; FontSize = 100; WindowsTools = $true }
 Register-Scenario cleanup.windows.zh CleanupPreview 'Chinese Windows entry cancellation and preview regression' `
     Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 30724; FontSize = 200; WindowsTools = $true }
+Register-Scenario cleanup.nuget CleanupPreview 'Official NuGet HTTP scope, cancel, cleanup and failure on synthetic data' `
+    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 9; FontSize = 100; NuGetTools = $true }
+Register-Scenario cleanup.nuget.zh CleanupPreview 'Chinese official NuGet HTTP confirmation and synthetic cleanup' `
+    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 30724; FontSize = 200; NuGetTools = $true }

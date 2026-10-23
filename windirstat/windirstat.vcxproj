@@ -229,6 +229,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClInclude Include="resource.h" />
     <ClInclude Include="Cleanup\CleanupPreview.h" />
     <ClInclude Include="Cleanup\CleanupPlan.h" />
+    <ClInclude Include="Cleanup\NuGetHttpCache.h" />
+    <ClInclude Include="Dialogs\NuGetHttpCacheDlg.h" />
     <ClInclude Include="Dialogs\CleanupPlanDlg.h" />
     <ClInclude Include="Dialogs\CleanupPreviewDlg.h" />
     <ClInclude Include="pch.h" />
@@ -255,6 +257,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
   <ItemGroup>
     <ClCompile Include="Cleanup\CleanupPreview.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Cleanup\CleanupPlan.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Cleanup\NuGetHttpCache.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Dialogs\NuGetHttpCacheDlg.cpp" />
     <ClCompile Include="Dialogs\CleanupPlanDlg.cpp" />
     <ClCompile Include="Dialogs\CleanupPreviewDlg.cpp" />
     <ClCompile Include="Controls\ExtensionListControl.cpp" />

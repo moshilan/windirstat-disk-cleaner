@@ -467,14 +467,21 @@
 #define IDC_CP_WINDOWS_RECOMMENDATIONS  1228
 #define IDC_CP_WINDOWS_DISK             1229
 #define IDC_CP_WINDOWS_NOTICE           1230
+#define IDC_CP_NUGET                    1231
+#define IDD_NUGET_HTTP                  126
+#define IDC_NH_NOTICE                   1232
+#define IDC_NH_DETAILS                  1233
+#define IDC_NH_STATUS                   1234
+#define IDC_NH_CLEAR                    1235
+#define IDC_NH_STOP                     1236
 
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        126
+#define _APS_NEXT_RESOURCE_VALUE        127
 #define _APS_NEXT_COMMAND_VALUE         32971
-#define _APS_NEXT_CONTROL_VALUE         1231
-#define _APS_NEXT_SYMED_VALUE           126
+#define _APS_NEXT_CONTROL_VALUE         1237
+#define _APS_NEXT_SYMED_VALUE           127
 #endif
 #endif

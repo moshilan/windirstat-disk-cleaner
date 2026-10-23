@@ -386,3 +386,7 @@
 - Settings实际绑定ApplicationFrameWindow（而非内部CoreWindow），cleanmgr实际绑定驱动器选择框；两者SC_CLOSE关闭通过，无按键注入、未点击原生清理/确定、未杀provider进程。启动取消默认动作、候选/统计独立、原12/24像素分隔条与页脚边界均通过。双语截图已查看，按钮及独立说明完整；测试仅证明启动/关闭，不冒充具体建议页、真实清理或释放量验收。
 - 下载核验记录Artifact12504565523 SHA256为ded424c049185cf3c5bf0ba0c770c88cc35ad8477d501849d63cba92232f56c9、便携Artifact12504635346为b2a3af13d4191c163ace00b532a4530290a85bd51c45c894bb6b279b00b6a2dc；EXE2.10.0.2229、3294208字节、SHA256为392dcbc24fcc3c9446ff3fc0aa28e1d21d0970cc5ddc45f18ebc598fedf22a78，匹配清单，23个依赖均为系统DLL。证据.local/cloud-build/39958856537/verification.json。
 - 仅补充BUILD-BASELINE验收记录；源码已推送，最终证据checkpoint本地保存。Git diff核对原扫描/缓存规则、Shell入口及底层实验无变化；保留原计划、自研执行阻断和所有失败/取消记录，检查最终status/diff后停止。
+
+## 2026-10-24 01:29
+- NuGet HTTP缓存试点：增加独立官方命令入口、实际范围查询、默认取消确认、取消/失败/字节观测结果；正式自研删除与原预览规则保持阻断/不变。仅系统安装dotnet及标准本地HTTP缓存可用，自定义位置或缓存别名/重解析点/硬链接被阻断。
+- 新增合成官方清理测试及复用双语预览回归；静态PS/XML/YAML、格式键和diff检查通过。云端编译/实际清理待验证，不记为通过。首次运行禁用证书及PATH修改，未在本机清理用户缓存。
