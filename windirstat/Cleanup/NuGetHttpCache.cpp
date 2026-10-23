@@ -351,6 +351,11 @@ namespace Cleanup::NuGetHttp
             const auto local = Known(FOLDERID_LocalAppData);
             if (!local.empty()) expected = local + L"\\NuGet\\v3-cache";
         }
+        // Runner TEMP can use an 8.3 alias; compare both sides in the same canonical form.
+        std::wstring normalizedExpected, pathError;
+        if (!NormalizeDirectory(expected, normalizedExpected, pathError))
+        { result.state = State::Blocked; result.diagnostic = L"Expected HTTP cache path is invalid: " + pathError; return result; }
+        expected = std::move(normalizedExpected);
         // Listing all locations is read-only and detects dangerous cache-location overlaps.
         const auto listed = Run(prepared->tool, L"nuget locals all --list --force-english-output", prepared->environment, prepared->cwd, stop);
         if (listed.cancelled) { result.state = State::Cancelled; return result; }
@@ -362,7 +367,7 @@ namespace Cleanup::NuGetHttp
         if (!SeparateCaches(listed.output, prepared->root))
         { result.state = State::Blocked; result.diagnostic = L"NuGet cache locations overlap or could not all be resolved. HTTP-only cleanup is blocked to preserve other caches."; return result; }
         if (expected.empty() || !Equal(expected, prepared->root))
-        { result.state = State::Blocked; result.diagnostic = L"This pilot only clears the standard HTTP cache location. A custom or unexpected actual location is blocked."; return result; }
+        { result.state = State::Blocked; result.diagnostic = L"This pilot only clears the standard HTTP cache location. A custom or unexpected actual location is blocked.\r\nExpected: " + expected + L"\r\nActual: " + prepared->root; return result; }
         prepared->environment[L"NUGET_HTTP_CACHE_PATH"] = prepared->root;
         std::vector<Handle> ancestors;
         if (!GuardAncestors(prepared->root, ancestors) || !HasSafeAncestors(prepared->root) || !Inspect(prepared->root, result.before, stop))
