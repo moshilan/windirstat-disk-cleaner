@@ -464,6 +464,9 @@
 #define IDC_CPLAN_SIMULATE              1225
 #define IDC_CPLAN_STOP                  1226
 #define IDC_CPLAN_NOTICE                1227
+#define IDC_CP_WINDOWS_RECOMMENDATIONS  1228
+#define IDC_CP_WINDOWS_DISK             1229
+#define IDC_CP_WINDOWS_NOTICE           1230
 
 // Next default values for new objects
 //
@@ -471,7 +474,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        126
 #define _APS_NEXT_COMMAND_VALUE         32971
-#define _APS_NEXT_CONTROL_VALUE         1228
+#define _APS_NEXT_CONTROL_VALUE         1231
 #define _APS_NEXT_SYMED_VALUE           126
 #endif
 #endif

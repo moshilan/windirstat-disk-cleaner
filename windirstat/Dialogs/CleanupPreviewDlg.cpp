@@ -248,6 +248,9 @@ bool CCleanupPreviewDlg::OnInitDialog()
         list->SetTextColor(DarkMode::SystemColor(COLOR_WINDOWTEXT));
     }
     m_layout.AddControl(IDC_CP_NOTICE, 0, 0, 1, 0);
+    m_layout.AddControl(IDC_CP_WINDOWS_RECOMMENDATIONS, 0, 0, 0, 0);
+    m_layout.AddControl(IDC_CP_WINDOWS_DISK, 0, 0, 0, 0);
+    m_layout.AddControl(IDC_CP_WINDOWS_NOTICE, 0, 0, 1, 0);
     m_layout.AddControl(IDC_CP_CATEGORIES, 0, 0, 1, 0);
     m_layout.AddControl(IDC_CP_FILES, 0, 0, 1, 1);
     for (const auto id : { IDC_CP_DETAILS, IDC_CP_EXCLUSIONS, IDC_CP_ISSUES, IDC_CP_STATUS, IDC_CP_TOTALS, IDC_CP_PROGRESS })
@@ -506,6 +509,7 @@ void CCleanupPreviewDlg::SetScanning(const bool scanning)
     for (const auto id : { IDC_CP_CATEGORIES, IDC_CP_EXCLUSIONS, IDC_CP_ADD_EXCLUSION }) GetDlgItem(id).EnableWindow(!scanning && m_optionsValid);
     GetDlgItem(IDC_CP_SCAN).EnableWindow(!scanning && m_optionsValid);
     GetDlgItem(IDC_CP_CANCEL).EnableWindow(scanning);
+    for (const auto id : { IDC_CP_WINDOWS_RECOMMENDATIONS, IDC_CP_WINDOWS_DISK }) GetDlgItem(id).EnableWindow(!scanning);
     GetDlgItem(IDC_CP_PLAN).EnableWindow(!scanning && m_valid && !m_result.incomplete && !m_result.cancelled &&
         !m_result.limitReached && m_result.failures == 0 && std::ranges::any_of(m_selected, [](bool value) { return value; }));
     for (const auto id : { IDC_CP_FILES, IDC_CP_SELECT_ALL, IDC_CP_SELECT_NONE, IDC_CP_SORT_SIZE, IDC_CP_HIDE_ZERO }) GetDlgItem(id).EnableWindow(!scanning && m_valid);
@@ -694,6 +698,46 @@ void CCleanupPreviewDlg::OnPlan()
     if (m_scanning || !m_valid || m_result.incomplete || m_result.cancelled || m_result.limitReached ||
         m_result.failures != 0 || std::ranges::none_of(m_selected, [](bool value) { return value; })) return;
     CCleanupPlanDlg(this, m_result, m_selected, m_scanOptions).ShowModal();
+}
+void CCleanupPreviewDlg::OnWindowsRecommendations() { OpenWindowsCleanup(true); }
+void CCleanupPreviewDlg::OnWindowsDiskCleanup() { OpenWindowsCleanup(false); }
+void CCleanupPreviewDlg::OpenWindowsCleanup(const bool recommendations)
+{
+    if (m_scanning) return;
+    const auto title = Localization::Lookup(recommendations ? IDS_CP_WINDOWS_RECOMMENDATIONS : IDS_CP_WINDOWS_DISK);
+    if (::MessageBoxW(Handle(), Localization::Format(IDS_CP_WINDOWS_CONFIRM, title).c_str(), title.c_str(),
+        MB_OKCANCEL | MB_ICONINFORMATION | MB_DEFBUTTON2) != IDOK)
+    {
+        SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_WINDOWS_CANCELLED));
+        return;
+    }
+    const auto& systemDirectory = GetSysDirectory();
+    if (!recommendations && systemDirectory.empty())
+    {
+        SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_WINDOWS_UNAVAILABLE));
+        SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_WINDOWS_MANUAL));
+        return;
+    }
+    const std::wstring target = recommendations ? L"ms-settings:storagerecommendations" : systemDirectory + L"\\cleanmgr.exe";
+    // Fixed official target, interactive only. No candidate paths, switches, runas or fallback.
+    SHELLEXECUTEINFOW launch{};
+    launch.cbSize = sizeof(launch);
+    launch.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
+    launch.hwnd = Handle();
+    launch.lpVerb = L"open";
+    launch.lpFile = target.c_str();
+    launch.nShow = SW_SHOWNORMAL;
+    if (!::ShellExecuteExW(&launch))
+    {
+        const auto error = GetLastError();
+        SetText(IDC_CP_STATUS, error == ERROR_CANCELLED ? Localization::Lookup(IDS_CP_WINDOWS_CANCELLED) :
+            Localization::Format(IDS_CP_WINDOWS_FAILED, title, error));
+        SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_WINDOWS_MANUAL));
+        return;
+    }
+    // Accepting a launch request proves neither cleanup completion nor released allocation.
+    SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_WINDOWS_REQUESTED));
+    SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_WINDOWS_MANUAL));
 }
 void CCleanupPreviewDlg::OnSelectAll()
 {

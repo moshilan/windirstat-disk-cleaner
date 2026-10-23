@@ -19,6 +19,9 @@ protected:
 private:
     void OnScan();
     void OnPlan();
+    void OnWindowsRecommendations();
+    void OnWindowsDiskCleanup();
+    void OpenWindowsCleanup(bool recommendations);
     void OnStop();
     void OnSelectAll();
     void OnSelectNone();
@@ -96,6 +99,8 @@ inline std::span<const RouteEntry> CCleanupPreviewDlg::Routes()
     {
         Route::Control<&OnScan>(BN_CLICKED, IDC_CP_SCAN),
         Route::Control<&OnPlan>(BN_CLICKED, IDC_CP_PLAN),
+        Route::Control<&OnWindowsRecommendations>(BN_CLICKED, IDC_CP_WINDOWS_RECOMMENDATIONS),
+        Route::Control<&OnWindowsDiskCleanup>(BN_CLICKED, IDC_CP_WINDOWS_DISK),
         Route::Control<&OnStop>(BN_CLICKED, IDC_CP_CANCEL),
         Route::Control<&OnSelectAll>(BN_CLICKED, IDC_CP_SELECT_ALL),
         Route::Control<&OnSelectNone>(BN_CLICKED, IDC_CP_SELECT_NONE),

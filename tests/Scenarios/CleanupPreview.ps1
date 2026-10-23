@@ -24,6 +24,78 @@ function Wait-CleanupPreviewIdle {
     } 'The cleanup worker and preview updates settle' -StableMilliseconds 350 | Out-Null
 }
 
+function Get-CleanupWindowsPrompt {
+    param($App, [IntPtr] $Preview)
+    return @([TestDesktop]::Windows($App.Process.Id) | Where-Object {
+        $_ -ne $Preview -and [TestDesktop]::Class($_) -eq '#32770' -and [TestDesktop]::IsWindowVisible($_) -and
+        [TestDesktop]::GetDlgItem($_, 1) -ne [IntPtr]::Zero -and [TestDesktop]::GetDlgItem($_, 2) -ne [IntPtr]::Zero
+    } | Select-Object -First 1)
+}
+
+function Test-CleanupWindowsCancel {
+    param($App, [IntPtr] $Preview)
+    $files = Get-DialogControl $Preview 'IDC_CP_FILES'
+    $before = @([NativeListViewHelper]::GetItemTexts($files))
+    $totals = [TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_TOTALS'))
+    $notice = [TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_WINDOWS_NOTICE'))
+    Assert-True ($notice -match 'separate|独立') 'Windows cleanup scope is explicitly separate from third-party candidates'
+    $first = [TestDesktop]::Rectangle((Get-DialogControl $Preview 'IDC_CP_WINDOWS_RECOMMENDATIONS'))
+    $second = [TestDesktop]::Rectangle((Get-DialogControl $Preview 'IDC_CP_WINDOWS_DISK'))
+    Assert-True ($first[2] -lt $second[0]) 'The two Windows entry labels have separate controls'
+    foreach ($control in 'IDC_CP_WINDOWS_RECOMMENDATIONS','IDC_CP_WINDOWS_DISK') {
+        $processes = @('SystemSettings','cleanmgr' | ForEach-Object { [Diagnostics.Process]::GetProcessesByName($_) } | ForEach-Object Id)
+        [void][TestDesktop]::PostMessage((Get-DialogControl $Preview $control), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        $prompt = Wait-Until { Get-CleanupWindowsPrompt $App $Preview } 'Windows tool launch requires an explicit user confirmation'
+        Assert-Equal ([TestDesktop]::Message($prompt, 0x0400).ToInt32() -band 0xFFFF) 2 'Cancel is the default action before launching Windows'
+        Close-AppDialog $prompt
+        Wait-Until { [TestDesktop]::IsWindowEnabled($Preview) } 'Cancelling returns to the preview' | Out-Null
+        Assert-True ([TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_STATUS')) -match 'cancelled|已取消') 'Cancel is reported without claiming cleanup completion'
+        $after = @('SystemSettings','cleanmgr' | ForEach-Object { [Diagnostics.Process]::GetProcessesByName($_) } | ForEach-Object Id)
+        Assert-Equal @($after | Where-Object { $_ -notin $processes }).Count 0 'Cancel starts neither Windows cleanup provider'
+    }
+    Assert-Sequence @([NativeListViewHelper]::GetItemTexts($files)) $before 'Windows launch cancellation preserves candidate identities'
+    Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_TOTALS'))) $totals 'Windows launch cancellation preserves selection and byte estimates'
+}
+
+function Test-CleanupWindowsLaunch {
+    param($App, [IntPtr] $Preview)
+    # Only the disposable cloud desktop opens real Windows tools. Never confirm cleanup there.
+    if ($env:GITHUB_ACTIONS -ne 'true') { Write-TestNote 'Actual Windows provider launch is cloud-only'; return }
+    $files = Get-DialogControl $Preview 'IDC_CP_FILES'
+    $before = @([NativeListViewHelper]::GetItemTexts($files))
+    $totals = [TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_TOTALS'))
+    foreach ($entry in @(
+        @{ Control = 'IDC_CP_WINDOWS_RECOMMENDATIONS'; Process = 'SystemSettings' },
+        @{ Control = 'IDC_CP_WINDOWS_DISK'; Process = 'cleanmgr' }
+    )) {
+        $visible = @([Diagnostics.Process]::GetProcessesByName($entry.Process) | ForEach-Object {
+            [TestDesktop]::Windows($_.Id) | Where-Object { [TestDesktop]::IsWindowVisible($_) }
+        })
+        [void][TestDesktop]::PostMessage((Get-DialogControl $Preview $entry.Control), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        $prompt = Wait-Until { Get-CleanupWindowsPrompt $App $Preview } 'The explicit Windows launch confirmation appears'
+        Close-AppDialog $prompt 1
+        Wait-Until { [TestDesktop]::IsWindowEnabled($Preview) } 'The launch request returns to the preview' | Out-Null
+        $status = [TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_STATUS'))
+        Assert-True ($status -match 'Launch requested|已发送启动请求') 'A successful launch is reported only as a request'
+        $processName = $entry.Process
+        $window = Wait-Until {
+            @([Diagnostics.Process]::GetProcessesByName($processName) | ForEach-Object {
+                [TestDesktop]::Windows($_.Id) | Where-Object { $_ -notin $visible -and [TestDesktop]::IsWindowVisible($_) }
+            } | Select-Object -First 1)
+        } "The official $processName provider creates a visible window" -Seconds 30
+        Add-Cleanup 'Close only the Windows provider window opened by this scenario' {
+            param($Window)
+            if ([TestDesktop]::IsWindow($Window)) { [void][TestDesktop]::PostMessage($Window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
+        } @($window)
+        # WM_CLOSE cancels the provider. No selection, OK, Clean up system files or cleanup action is invoked.
+        [void][TestDesktop]::PostMessage($window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+        Wait-Until { -not [TestDesktop]::IsWindow($window) -or -not [TestDesktop]::IsWindowVisible($window) } 'Closing the provider cancels without confirming cleanup' -Seconds 30 | Out-Null
+        Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_STATUS'))) $status 'Provider cancellation never reports cleanup completion or released space'
+    }
+    Assert-Sequence @([NativeListViewHelper]::GetItemTexts($files)) $before 'Official providers do not replace third-party preview candidates'
+    Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_TOTALS'))) $totals 'Official providers do not change preview estimates'
+}
+
 function Test-CleanupReadOnlyPlan {
     param($App, [IntPtr] $Preview, [string[]] $Expected)
     $open = Get-DialogControl $Preview 'IDC_CP_PLAN'
@@ -370,6 +442,7 @@ function Test-CleanupPreview {
             'Explicit bulk selection checks candidates without modifying them'
     }
     $allTotals = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_TOTALS'))
+    Test-CleanupWindowsCancel $app $dialog
     Test-CleanupReadOnlyPlan $app $dialog $expected
     Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_TOTALS'))) $allTotals `
         'Building and simulating independent plans preserves the original selection and totals'
@@ -450,6 +523,15 @@ function Test-CleanupPreview {
     Wait-Until { [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_CP_DETAILS')).Contains($first) } `
         'Full candidate path is available outside clipped columns' | Out-Null
     Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root 'cleanup-preview.png')
+
+    if ($Case.ContainsKey('WindowsTools')) {
+        if ($Case.Language -eq 9) { Test-CleanupWindowsLaunch $app $dialog }
+        Assert-Sequence @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash | ForEach-Object Hash) `
+            @($before.Hash) 'Windows launch and cancellation leave every synthetic payload unchanged'
+        Close-AppDialog $dialog
+        Stop-TestApp $app
+        return # Reuse preview/plan/layout coverage above; do not run unrelated later ACL/persistence scenarios.
+    }
 
     $excluded = Join-Path $local 'Temp\excluded'
     Set-CleanupExclusions $dialog $excluded
@@ -684,3 +766,7 @@ Register-Scenario cleanup.preview CleanupPreview 'Read-only cleanup categories, 
     Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 9; FontSize = 100 }
 Register-Scenario cleanup.preview.zh CleanupPreview 'Chinese read-only cleanup preview and failure explanations' `
     Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 30724; FontSize = 200 }
+Register-Scenario cleanup.windows CleanupPreview 'Windows entry launch/cancel and existing synthetic preview regression' `
+    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 9; FontSize = 100; WindowsTools = $true }
+Register-Scenario cleanup.windows.zh CleanupPreview 'Chinese Windows entry cancellation and preview regression' `
+    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 30724; FontSize = 200; WindowsTools = $true }
