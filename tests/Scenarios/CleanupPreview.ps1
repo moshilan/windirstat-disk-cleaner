@@ -42,6 +42,11 @@ function Test-CleanupWindowsCancel {
     $first = [TestDesktop]::Rectangle((Get-DialogControl $Preview 'IDC_CP_WINDOWS_RECOMMENDATIONS'))
     $second = [TestDesktop]::Rectangle((Get-DialogControl $Preview 'IDC_CP_WINDOWS_DISK'))
     Assert-True ($first[2] -lt $second[0]) 'The two Windows entry labels have separate controls'
+    $bounds = [TestDesktop]::Rectangle($Preview)
+    foreach ($id in 'IDC_CP_SCAN','IDC_CP_CANCEL','IDC_CP_SELECT_ALL','IDC_CP_SELECT_NONE','IDCANCEL') {
+        $button = [TestDesktop]::Rectangle((Get-DialogControl $Preview $id))
+        Assert-True ($button[3] -lt $bounds[3] - 3) 'Every bottom action fits inside the preview frame'
+    }
     foreach ($control in 'IDC_CP_WINDOWS_RECOMMENDATIONS','IDC_CP_WINDOWS_DISK') {
         $processes = @('SystemSettings','cleanmgr' | ForEach-Object { [Diagnostics.Process]::GetProcessesByName($_) } | ForEach-Object Id)
         [void][TestDesktop]::PostMessage((Get-DialogControl $Preview $control), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
@@ -75,8 +80,11 @@ function Test-CleanupWindowsLaunch {
         $prompt = Wait-Until { Get-CleanupWindowsPrompt $App $Preview } 'The explicit Windows launch confirmation appears'
         Close-AppDialog $prompt 1
         Wait-Until { [TestDesktop]::IsWindowEnabled($Preview) } 'The launch request returns to the preview' | Out-Null
-        $status = [TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_STATUS'))
-        Assert-True ($status -match 'Launch requested|已发送启动请求') 'A successful launch is reported only as a request'
+        $status = Wait-Until {
+            $text = [TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_STATUS'))
+            if ($text -match 'Launch requested|已发送启动请求|Could not open|无法打开|unavailable|不可用') { $text }
+        } 'Wait for the asynchronous provider activation request result' -Seconds 30 -StableMilliseconds 350
+        Assert-True ($status -match 'Launch requested|已发送启动请求') "A successful launch is reported only as a request (observed: $status)"
         $processName = $entry.Process
         $window = Wait-Until {
             @([Diagnostics.Process]::GetProcessesByName($processName) | ForEach-Object {
