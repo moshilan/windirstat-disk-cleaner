@@ -111,11 +111,12 @@ namespace RecycleExperiment
     }
     struct Prototype::Impl
     {
-        fs::path root, temp;
+        fs::path root, temp, retained;
         Cleanup::ScanOptions options;
         struct Receipt { fs::path path; Handle retained{ nullptr, CloseHandle }; Cleanup::Candidate identity; };
         std::vector<Receipt> receipts;
         std::vector<Handle> pins;
+        size_t CreateAt(const fs::path& path);
         size_t Find(const Cleanup::Candidate& candidate) const
         {
             for (size_t i = 0; i < receipts.size(); ++i)
@@ -137,6 +138,8 @@ namespace RecycleExperiment
         m->root = parent / (L"WinDirStatRecycleExperiment-" + std::wstring(name));
         if (!CreateDirectoryW(m->root.c_str(), nullptr)) throw std::runtime_error("Fixture must be newly created");
         auto rootPins = PinAncestors(m->root);
+        m->retained = m->root / L"retained";
+        if (!CreateDirectoryW(m->retained.c_str(), nullptr)) throw std::runtime_error("Create retained area failed");
         if (!CreateDirectoryW((m->root / L"LocalAppData").c_str(), nullptr)) throw std::runtime_error("Create anchor failed");
         auto anchorPins = PinAncestors(m->root / L"LocalAppData");
         m->temp = m->root / L"LocalAppData" / L"Temp";
@@ -148,8 +151,12 @@ namespace RecycleExperiment
     Prototype::~Prototype() = default; // Preserve all remaining files. Never clean up by deleting.
     size_t Prototype::Create()
     {
-        Impl::Receipt receipt;
-        receipt.path = m->temp / (std::to_wstring(m->receipts.size()) + L".tmp");
+        return m->CreateAt(m->temp / (std::to_wstring(m->receipts.size()) + L".tmp"));
+    }
+    size_t Prototype::Impl::CreateAt(const fs::path& path)
+    {
+        Receipt receipt;
+        receipt.path = path;
         Handle writer(CreateFileW(receipt.path.c_str(), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_NEW,
             FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr), CloseHandle);
         if (writer.get() == INVALID_HANDLE_VALUE) { writer.release(); throw std::runtime_error("CREATE_NEW failed"); }
@@ -170,7 +177,7 @@ namespace RecycleExperiment
         receipt.retained.reset(retained);
         if (!Identity(receipt.retained.get(), receipt.identity)) throw std::runtime_error("Receipt identity mismatch");
         writer.reset();
-        m->receipts.push_back(std::move(receipt)); return m->receipts.size() - 1;
+        receipts.push_back(std::move(receipt)); return receipts.size() - 1;
     }
     const fs::path& Prototype::Path(size_t i) const { return m->receipts.at(i).path; }
     const fs::path& Prototype::Root() const { return m->root; }
@@ -215,8 +222,7 @@ namespace RecycleExperiment
         }
         return result;
     }
-    Record Prototype::ShellControl(const Cleanup::CleanupPlan& plan, size_t itemIndex, Control control,
-        size_t replacementReceipt, std::stop_token stop)
+    Record Prototype::ShellControl(const Cleanup::CleanupPlan& plan, size_t itemIndex, Control control, std::stop_token stop)
     {
         Record result; result.itemIndex = itemIndex;
         if (stop.stop_requested()) { result.state = State::Cancelled; result.reason = Reason::Cancelled; return result; }
@@ -231,15 +237,22 @@ namespace RecycleExperiment
         if (!observed) { result.state = State::Failed; result.reason = Reason::Access; result.error = GetLastError(); return result; }
         if (!Identity(observed.get(), item.candidate) || !FinalPath(observed.get(), Path(receipt)))
         { result.reason = Reason::Changed; return result; }
-        const bool replacing = control == Control::ReplaceBeforePre || control == Control::ReplaceAfterPre;
-        if (replacing && (replacementReceipt >= m->receipts.size() || replacementReceipt == receipt || !IsOriginal(replacementReceipt)))
-        { result.reason = Reason::NotOwned; return result; }
+        size_t replacement = SIZE_MAX;
         const auto replace = [&]()
         {
-            const auto saved = Path(receipt).wstring() + L".retained";
-            // Both names and both objects are generated/owned by this instance; no overwrite allowed.
-            return MoveFileExW(Path(receipt).c_str(), saved.c_str(), 0) &&
-                MoveFileExW(Path(replacementReceipt).c_str(), Path(receipt).c_str(), 0);
+            const auto original = Path(receipt);
+            const auto saved = (m->retained / original.filename()).wstring();
+            // A pinned parent blocks ordinary rename INTO it, but does not prevent CREATE_NEW
+            // after moving a child OUT. Keep all objects and names inside this owned instance.
+            const auto bytes = saved.size() * sizeof(wchar_t);
+            std::vector<BYTE> data(offsetof(FILE_RENAME_INFO, FileName) + bytes, 0);
+            auto* rename = reinterpret_cast<FILE_RENAME_INFO*>(data.data());
+            rename->FileNameLength = DWORD(bytes);
+            memcpy(rename->FileName, saved.data(), bytes);
+            if (!SetFileInformationByHandle(observed.get(), FileRenameInfo, rename, DWORD(data.size())))
+            { result.error = GetLastError(); return false; }
+            replacement = m->CreateAt(original); // Copy above survives receipt-vector growth.
+            return true;
         };
         CComPtr<IFileOperation> operation; CComPtr<IShellItem> source;
         HRESULT hr = operation.CoCreateInstance(CLSID_FileOperation, nullptr, CLSCTX_INPROC_SERVER);
@@ -273,10 +286,13 @@ namespace RecycleExperiment
             {
                 auto recycled = Open(path, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE);
                 result.recycledIdentityMatches = recycled && Identity(recycled.get(), item.candidate);
+                result.recycledReplacementMatches = recycled && replacement != SIZE_MAX &&
+                    Identity(recycled.get(), m->receipts[replacement].identity);
                 CoTaskMemFree(path);
             }
-            result.state = SUCCEEDED(result.performed) && SUCCEEDED(result.abortedQuery) && !result.aborted ? State::Recycled : State::Unknown;
-            result.reason = Reason::None;
+            result.state = SUCCEEDED(result.performed) && SUCCEEDED(result.abortedQuery) && !result.aborted &&
+                (result.recycledIdentityMatches || result.recycledReplacementMatches) ? State::Recycled : State::Unknown;
+            result.reason = result.state == State::Recycled ? Reason::None : Reason::Shell;
         }
         else result.state = result.post && SUCCEEDED(result.itemResult) ? State::Unknown : State::Failed;
         return result;

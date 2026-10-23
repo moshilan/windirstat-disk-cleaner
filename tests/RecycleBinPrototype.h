@@ -20,6 +20,7 @@ namespace RecycleExperiment
         DWORD error = 0;
         HRESULT queued = E_PENDING, performed = E_PENDING, itemResult = E_PENDING, abortedQuery = E_PENDING;
         bool pre = false, post = false, aborted = false, recycleItem = false, recycledIdentityMatches = false;
+        bool recycledReplacementMatches = false;
     };
     struct Review
     {
@@ -42,8 +43,7 @@ namespace RecycleExperiment
         Review Evaluate(const Cleanup::CleanupPlan&, std::stop_token = {}) const;
         // UNSAFE FOR REAL FILES: controlled Shell semantics experiment, not the plan executor.
         // Only this instance's created receipts can reach the Shell. No arbitrary path argument.
-        Record ShellControl(const Cleanup::CleanupPlan&, size_t itemIndex, Control = Control::Normal,
-            size_t replacementReceipt = SIZE_MAX, std::stop_token = {});
+        Record ShellControl(const Cleanup::CleanupPlan&, size_t itemIndex, Control = Control::Normal, std::stop_token = {});
         const std::filesystem::path& Path(size_t receipt) const;
         const std::filesystem::path& Root() const;
         bool IsOriginal(size_t receipt) const;

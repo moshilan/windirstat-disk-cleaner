@@ -23,7 +23,8 @@ static void Print(const char* name, const Record& record)
         << ",\"queued\":" << record.queued << ",\"performed\":" << record.performed << ",\"itemResult\":" << record.itemResult
         << ",\"abortedQuery\":" << record.abortedQuery << ",\"pre\":" << record.pre << ",\"post\":" << record.post
         << ",\"aborted\":" << record.aborted << ",\"recycleItem\":" << record.recycleItem
-        << ",\"recycledIdentityMatches\":" << record.recycledIdentityMatches << "}\n";
+        << ",\"recycledIdentityMatches\":" << record.recycledIdentityMatches
+        << ",\"recycledReplacementMatches\":" << record.recycledReplacementMatches << "}\n";
 }
 class RestrictedScope
 {
@@ -100,7 +101,7 @@ static void Run()
     std::stop_source cancelled; cancelled.request_stop();
     review = prototype.Evaluate(plan, cancelled.get_token());
     Check(review.cancelled == 10 && review.blocked == 0 && review.records.size() == 10, "Cancelled plan accounts for every item");
-    const auto beforeCancel = prototype.ShellControl(plan, Index(plan, prototype.Path(0)), Control::Normal, SIZE_MAX, cancelled.get_token());
+    const auto beforeCancel = prototype.ShellControl(plan, Index(plan, prototype.Path(0)), Control::Normal, cancelled.get_token());
     Print("cancel_before_queue", beforeCancel);
     Check(beforeCancel.state == State::Cancelled && !beforeCancel.pre && prototype.IsOriginal(0), "Cancellation makes no Shell call");
     const auto atPre = prototype.ShellControl(plan, Index(plan, prototype.Path(0)), Control::CancelAtPre);
@@ -125,16 +126,16 @@ static void Run()
         !fs::exists(prototype.Path(3)), "Normal CONTROL verifies actual item result and recycled identity");
     // Refresh the plan after the first real operation; no replay of an already recycled plan.
     plan = prototype.Plan();
-    const auto changed = prototype.ShellControl(plan, Index(plan, prototype.Path(4)), Control::ReplaceBeforePre, 5);
+    const auto changed = prototype.ShellControl(plan, Index(plan, prototype.Path(4)), Control::ReplaceBeforePre);
     Print("replace_before_pre", changed);
     Check(changed.state == State::Blocked && changed.reason == Reason::Changed && changed.pre &&
-        fs::exists(prototype.Path(4)) && fs::exists(prototype.Path(4).wstring() + L".retained"),
+        fs::exists(prototype.Path(4)) && fs::exists(prototype.Root() / L"retained" / prototype.Path(4).filename()),
         "Path replacement before final callback is vetoed, both owned files survive");
     plan = prototype.Plan();
-    const auto raced = prototype.ShellControl(plan, Index(plan, prototype.Path(6)), Control::ReplaceAfterPre, 7);
+    const auto raced = prototype.ShellControl(plan, Index(plan, prototype.Path(6)), Control::ReplaceAfterPre);
     Print("replace_after_pre_CONTROL", raced);
-    Check(raced.state == State::Recycled && raced.recycleItem && !raced.recycledIdentityMatches &&
-        !fs::exists(prototype.Path(6)) && fs::exists(prototype.Path(6).wstring() + L".retained"),
+    Check(raced.state == State::Recycled && raced.recycleItem && !raced.recycledIdentityMatches && raced.recycledReplacementMatches &&
+        !fs::exists(prototype.Path(6)) && fs::exists(prototype.Root() / L"retained" / prototype.Path(6).filename()),
         "Counterexample: callback identity check does not atomically bind Shell disposition");
     // Three individual control results, including a genuine sharing failure between two successes.
     plan = prototype.Plan();
