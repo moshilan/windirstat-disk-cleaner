@@ -1,6 +1,6 @@
 # 安全清理计划与只读模拟
 
-日期：2026-10-23。本阶段仅实现计划和模拟，没有真实清理后端、删除按钮、提权或权限修改。原扫描、重复检测、缓存识别规则及原WinDirStat删除入口保持原状；新增保护只适用于本计划流程。
+日期：2026-10-23。正式功能仅实现计划和模拟，没有真实清理后端、删除按钮、提权或权限修改。独立测试程序的受控回收实验见文末，不进入主程序。原扫描、重复检测、缓存识别规则及原WinDirStat删除入口保持原状；新增保护只适用于本计划流程。
 
 ## 计划边界
 
@@ -54,3 +54,17 @@
 源码1f4e2d9的[云端运行39836143914](https://github.com/moshilan/windirstat-disk-cleaner/actions/runs/39836143914)通过：Release x64及核心编译0警告/0错误，核心250项、双语GUI各272项及原扫描319项，共1113项。三种处置的只读结果、官方方式初始跳过统计、选择快照、配置失效、文件变化和占用、取消及输入不变均已验证。便携2.10.0.2213与构建记录已下载并核验摘要；本机不另启GUI，实际GUI覆盖限云端1024×720、100%字体，其他DPI及人工视觉验收未覆盖。
 
 元数据模拟不读取或散列载荷内容，不证明应用已退出、文件可回收、具有删除权限或未来能够安全执行。NTFS变更时间能发现普通同长度且还原创建/修改时间的改写，但不承诺识别特权进程伪造全部元数据。复核句柄在观察后关闭，祖先路径和规则状态仍存在观察间隙；未解决真实处置的TOCTOU、应用占用、配对缓存语义、Shell逐项回收、Windows维护API或实际空闲空间测量。任何真实执行都需要后续独立授权与专项验证，不能把模拟通过直接当作删除许可。
+
+## 隔离回收实验（待构建验证）
+
+用户另行授权仅测试程序自建合成数据的真实回收。新增tests/RecycleBinPrototype及其独立测试目标，不链接主程序，也不提供外部路径参数。每个实例在临时目录下创建随机全新根，以CREATE_NEW创建文件，从原创建句柄取得卷及文件ID，用ReOpenFile建立持续持有的对象凭据；只扫描该实例的锚点。其他实例或任意计划不能授予文件所有权。样本不自动删除，不枚举或清空已有回收站。
+
+计划后端Evaluate复用既有计划复核，合格项也返回BindingUnavailable，readyForRealFiles恒为false，不调用Shell。独立ShellControl仅作有真实副作用的接口实验，绝不能用于真实用户文件。它从固定本地NTFS卷逐级打开、校验并持有祖先目录句柄，拒绝重解析点及最终路径不一致，拒绝祖先普通写入和删除共享；末级实验句柄明确允许删除共享，以观察Shell行为，不能宣称这已绑定处置对象。
+
+微软[IFileOperation::DeleteItem](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifileoperation-deleteitem)接收IShellItem，没有已验证HANDLE或expected FILE_ID参数。[IFileSystemBindData2](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ifilesystembinddata2)中的文件ID属于名称解析优化，未承诺最终处置原子比较。前置回调再次核验身份可以拒绝此前的替换，但回调返回到实际处置仍有竞态；禁止将其接入正式流程，禁止释放更严格的身份守卫后自动重试。
+
+实验显式设置[FOFX_RECYCLEONDELETE](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifileoperation-setoperationflags)，无提权标志、永久删除、Shell失败回退或自动重试。每次只入队一个自有普通文件，禁止关联元素及复制钩子。逐项记录入队、PerformOperations、GetAnyOperationsAborted、前后回调、真实hrDelete、新回收站对象及其身份；[PostDeleteItem](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifileoperationprogresssink-postdeleteitem)成功却无回收站新项必须记为未知/异常，不能事后视为已阻止永久删除。回收不是释放空间，实际释放仍记0。
+
+新增云端verification=recycle-experiment模式保留既有主程序构建和双语合成扫描，只运行新无界面实验，跳过旧核心及GUI场景，避免重复模拟及旧场景的ACL改动。权限实验使用当前账号受限令牌，不改ACL、不取得所有权。拟验证正常回收、祖先固定和重解析拒绝、身份锁冲突、权限失败、取消、回调前替换阻断、回调后替换反例及逐项部分失败。尚未运行，不能记为已通过。
+
+进入正式清理仍缺少有文档保证的原子目标绑定、保护/规则提交点一致性、持久化开始与逐项日志、崩溃未知态及取消后的对账。本实验即使通过也不具备接入正式清理流程的条件。

@@ -2,6 +2,12 @@ name: Build portable x64
 
 on:
   workflow_dispatch:
+    inputs:
+      verification:
+        description: Verification suite (recycle experiment uses only self-created synthetic files)
+        type: choice
+        options: [full, recycle-experiment]
+        default: full
 
 permissions:
   contents: read
@@ -68,6 +74,7 @@ jobs:
         run: ./.github/scripts/Test-SyntheticScan.ps1 -Executable build/WinDirStat_x64.exe -OutputDirectory artifacts/records
 
       - name: Verify restricted read-only cleanup scanner
+        if: inputs.verification != 'recycle-experiment'
         run: |
           & $env:MSBUILD_EXE tests/CleanupPreviewTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/cleanup-tests-build.log;verbosity=normal'
           if ($LASTEXITCODE -ne 0) { throw 'Cleanup test executable build failed.' }
@@ -76,6 +83,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Read-only cleanup scanner regression failed.' }
 
       - name: Verify scan policy and measure synthetic workloads
+        if: inputs.verification != 'recycle-experiment'
         run: |
           $reportRoot = Join-Path $env:RUNNER_TEMP 'scan-policy-results'
           # Keep fixtures so the selected tests perform no deletion; the disposable runner owns cleanup.
@@ -94,6 +102,14 @@ jobs:
             }
           }
           if ($testExit -ne 0) { throw "Scan policy regression failed: $testExit" }
+
+      - name: Verify isolated recycle-bin experiment without GUI or ACL changes
+        if: inputs.verification == 'recycle-experiment'
+        run: |
+          & $env:MSBUILD_EXE tests/RecycleBinPrototypeTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/recycle-tests-build.log;verbosity=normal'
+          if ($LASTEXITCODE -ne 0) { throw 'Recycle experiment build failed.' }
+          & intermediate/recycle-experiment/RecycleBinPrototypeTests.exe | Tee-Object -FilePath artifacts/records/recycle-experiment.jsonl
+          if ($LASTEXITCODE -ne 0) { throw 'Isolated recycle experiment failed.' }
 
       - name: Package portable EXE and licenses
         run: |
