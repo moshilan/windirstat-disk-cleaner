@@ -236,6 +236,13 @@ public static class TestDesktop
         return windows.ToArray();
     }
 
+    public static IntPtr RootWindow(IntPtr window) => GetAncestor(window, 2);
+    public static uint ProcessId(IntPtr window)
+    {
+        GetWindowThreadProcessId(window, out uint process);
+        return process;
+    }
+
     public static IntPtr[] Children(IntPtr root)
     {
         var windows = new List<IntPtr>();

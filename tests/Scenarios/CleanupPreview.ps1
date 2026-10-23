@@ -75,7 +75,7 @@ function Test-CleanupWindowsLaunch {
         @{ Control = 'IDC_CP_WINDOWS_RECOMMENDATIONS'; Process = 'SystemSettings' },
         @{ Control = 'IDC_CP_WINDOWS_DISK'; Process = 'cleanmgr' }
     )) {
-        $visible = @([Diagnostics.Process]::GetProcessesByName($entry.Process) | ForEach-Object {
+        $visible = @(@($entry.Process, 'ApplicationFrameHost') | ForEach-Object { [Diagnostics.Process]::GetProcessesByName($_) } | ForEach-Object {
             [TestDesktop]::Windows($_.Id) | Where-Object { [TestDesktop]::IsWindowVisible($_) }
         })
         [void][TestDesktop]::PostMessage((Get-DialogControl $Preview $entry.Control), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
@@ -89,16 +89,27 @@ function Test-CleanupWindowsLaunch {
         Assert-True ($status -match 'Launch requested|已发送启动请求') "A successful launch is reported only as a request (observed: $status)"
         $processName = $entry.Process
         $window = Wait-Until {
-            @([Diagnostics.Process]::GetProcessesByName($processName) | ForEach-Object {
-                [TestDesktop]::Windows($_.Id) | Where-Object { $_ -notin $visible -and [TestDesktop]::IsWindowVisible($_) }
-            } | Select-Object -First 1)
-        } "The official $processName provider creates a visible window" -Seconds 30
+            $providerIds = @([Diagnostics.Process]::GetProcessesByName($processName) | ForEach-Object Id)
+            $roots = @($providerIds | ForEach-Object { [TestDesktop]::Windows($_) | ForEach-Object { [TestDesktop]::RootWindow($_) } })
+            if ($processName -eq 'SystemSettings') {
+                $roots += @([Diagnostics.Process]::GetProcessesByName('ApplicationFrameHost') | ForEach-Object {
+                    [TestDesktop]::Windows($_.Id) | Where-Object {
+                        @([TestDesktop]::Children($_) | Where-Object { [TestDesktop]::ProcessId($_) -in $providerIds }).Count -gt 0
+                    }
+                })
+            }
+            @($roots | Select-Object -Unique | Where-Object { $_ -notin $visible -and [TestDesktop]::IsWindowVisible($_) } | Select-Object -First 1)
+        } "The official $processName provider creates a visible window" -Seconds 30 -StableMilliseconds 750
+        $ownerProcess = [TestDesktop]::ProcessId($window)
+        Write-TestNote "Official $processName window: class=$([TestDesktop]::Class($window)); title=$([TestDesktop]::Text($window)); close=SC_CLOSE; page location not asserted"
         Add-Cleanup 'Close only the Windows provider window opened by this scenario' {
-            param($Window)
-            if ([TestDesktop]::IsWindow($Window)) { [void][TestDesktop]::PostMessage($Window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
-        } @($window)
-        # WM_CLOSE cancels the provider. No selection, OK, Clean up system files or cleanup action is invoked.
-        [void][TestDesktop]::PostMessage($window, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+            param($Window, $OwnerProcess)
+            if ([TestDesktop]::IsWindow($Window) -and [TestDesktop]::ProcessId($Window) -eq $OwnerProcess) {
+                [void][TestDesktop]::PostMessage($Window, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero)
+            }
+        } @($window, $ownerProcess)
+        # Close the real frame via its system menu, including hosted Settings. Never click cleanup/OK.
+        [void][TestDesktop]::PostMessage($window, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero)
         Wait-Until { -not [TestDesktop]::IsWindow($window) -or -not [TestDesktop]::IsWindowVisible($window) } 'Closing the provider cancels without confirming cleanup' -Seconds 30 | Out-Null
         Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_STATUS'))) $status 'Provider cancellation never reports cleanup completion or released space'
     }
