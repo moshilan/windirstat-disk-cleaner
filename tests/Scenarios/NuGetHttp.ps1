@@ -7,6 +7,29 @@ function Test-NuGetHttpFlow {
         New-TestFile (Join-Path $Root "$_\nuget-sentinel") 4097
     })
     $hashes = @($sentinels | Get-FileHash | ForEach-Object Hash)
+    $httpHashes = @($a,$b | Get-FileHash | ForEach-Object Hash)
+    foreach ($rule in @($http, (Join-Path $http 'source'), 'relative-directory')) {
+        Set-CleanupExclusions $Preview $rule
+        [void][TestDesktop]::PostMessage((Get-DialogControl $Preview 'IDC_CP_NUGET'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        $blocked = Wait-Until { Get-AppDialog $App 'IDC_NH_CLEAR' } 'Official scope review opens with current exclusions'
+        $clearBlocked = Get-DialogControl $blocked 'IDC_NH_CLEAR'
+        $stopBlocked = Get-DialogControl $blocked 'IDC_NH_STOP'
+        Wait-Until { -not [TestDesktop]::IsWindowEnabled($stopBlocked) } 'Exclusion protection settles' -StableMilliseconds 350 | Out-Null
+        Assert-True (-not [TestDesktop]::IsWindowEnabled($clearBlocked)) 'Conflicting or invalid exclusion rules disable confirmation'
+        $status = [TestDesktop]::ControlText((Get-DialogControl $blocked 'IDC_NH_STATUS'))
+        Assert-True ($status -match 'excluded directory|exclusion rules|排除目录|排除规则') 'The reason identifies exclusion protection'
+        if ($rule -ne 'relative-directory') {
+            $detail = [TestDesktop]::ControlText((Get-DialogControl $blocked 'IDC_NH_DETAILS'))
+            Assert-True ($detail.Contains($rule)) 'The conflicting excluded directory is shown'
+        }
+        # Sending the command directly must not bypass the disabled control or create a confirmation.
+        [void][TestDesktop]::Message($blocked, 0x0111, (Get-ResourceId 'IDC_NH_CLEAR'), $clearBlocked.ToInt64())
+        Assert-Equal @(Get-CleanupWindowsPrompt $App $Preview).Count 0 'Blocked scope has no confirmation override'
+        Assert-Sequence @($a,$b | Get-FileHash | ForEach-Object Hash) $httpHashes 'Exclusion conflicts and detection failure clear no synthetic file'
+        Close-AppDialog $blocked
+        Wait-Until { [TestDesktop]::IsWindowEnabled($Preview) } 'Blocked scope returns without running cleanup' | Out-Null
+    }
+    Set-CleanupExclusions $Preview (Join-Path $Root 'project')
     foreach ($attempt in 'success','failure') {
         [void][TestDesktop]::PostMessage((Get-DialogControl $Preview 'IDC_CP_NUGET'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
         $dialog = Wait-Until { Get-AppDialog $App 'IDC_NH_CLEAR' } 'Independent official NuGet scope dialog opens'
@@ -21,6 +44,7 @@ function Test-NuGetHttpFlow {
         $notice = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_NH_NOTICE'))
         Assert-True ($notice -match 'ENTIRE|整个') 'The entire HTTP cache scope is explicit'
         Assert-True ($notice -match 'unchecked|未勾选') 'Official cleanup is independent of preview selection'
+        Assert-True ($notice -match 'excluded directory|排除目录') 'Exclusion overlap is an explicit non-overridable guard'
         Assert-True ($notice -match 'undone|撤销') 'Irreversible impact is visible before confirmation'
         $bounds = [TestDesktop]::Rectangle($dialog)
         $work = [System.Windows.Forms.Screen]::FromHandle($dialog).WorkingArea
@@ -69,4 +93,5 @@ function Test-NuGetHttpFlow {
             New-TestFile (Join-Path $http 'source\free.dat') 6789 | Out-Null
         }
     }
+    Set-CleanupExclusions $Preview ''
 }

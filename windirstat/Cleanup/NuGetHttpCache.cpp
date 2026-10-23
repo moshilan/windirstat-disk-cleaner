@@ -304,6 +304,60 @@ namespace Cleanup::NuGetHttp
             }
             return true;
         }
+        std::wstring PhysicalDirectory(const std::wstring& path)
+        {
+            Handle directory(CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+            FILE_ATTRIBUTE_TAG_INFO info{};
+            if (!directory || !GetFileInformationByHandleEx(directory.value, FileAttributeTagInfo, &info, sizeof(info)) ||
+                !(info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (info.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) return {};
+            std::wstring value(32768, L'\0');
+            const auto length = GetFinalPathNameByHandleW(directory.value, value.data(), static_cast<DWORD>(value.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+            if (length == 0 || length >= value.size()) return {};
+            value.resize(length);
+            if (!value.starts_with(L"\\\\?\\") || value.starts_with(L"\\\\?\\UNC\\")) return {};
+            value.erase(0, 4);
+            if (value.size() == 3 && value[1] == L':') return value;
+            std::wstring normalized, error;
+            return NormalizeDirectory(value, normalized, error) ? normalized : L"";
+        }
+        ExclusionFailure CheckExclusions(const std::wstring& root, const ExclusionPolicy& policy,
+            std::wstring& excluded, std::wstring& diagnostic)
+        {
+            std::vector<std::wstring> directories;
+            std::wstring error;
+            if (!policy.available || !ParseExclusions(policy.text, directories, error))
+            { diagnostic = L"Exclusion rules are unavailable or invalid. No clear command was started. " + error; return ExclusionFailure::Unavailable; }
+            const auto physicalRoot = root.empty() ? L"" : PhysicalDirectory(root);
+            if (!root.empty() && physicalRoot.empty())
+            { diagnostic = L"The actual HTTP cache path cannot be resolved for exclusion checks."; return ExclusionFailure::Unavailable; }
+            for (const auto& directory : directories)
+            {
+                // Resolve existing 8.3 ancestors even when the excluded child does not exist.
+                auto existing = std::filesystem::path(directory);
+                DWORD attributes = INVALID_FILE_ATTRIBUTES;
+                while ((attributes = GetFileAttributesW(existing.c_str())) == INVALID_FILE_ATTRIBUTES)
+                {
+                    const auto code = GetLastError();
+                    const auto parent = existing.parent_path();
+                    if ((code != ERROR_FILE_NOT_FOUND && code != ERROR_PATH_NOT_FOUND) || parent == existing || parent.empty()) break;
+                    existing = parent;
+                }
+                std::wstring canonical;
+                if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+                    (attributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_OFFLINE |
+                        FILE_ATTRIBUTE_RECALL_ON_OPEN | FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)) ||
+                    (existing != existing.root_path() && !HasSafeAncestors(existing.wstring())) ||
+                    (canonical = PhysicalDirectory(existing.wstring())).empty())
+                { excluded = directory; diagnostic = L"An excluded directory cannot be reliably checked: " + directory; return ExclusionFailure::Unavailable; }
+                // Joining through filesystem::path preserves the separator for a drive-root ancestor.
+                const auto tail = std::filesystem::path(directory).lexically_relative(existing);
+                const auto resolved = (std::filesystem::path(canonical) / tail).lexically_normal().wstring();
+                if (!root.empty() && (IsWithin(physicalRoot, resolved) || IsWithin(resolved, physicalRoot)))
+                { excluded = directory; diagnostic = L"The entire HTTP cache overlaps an excluded directory: " + directory; return ExclusionFailure::Overlap; }
+            }
+            return ExclusionFailure::None;
+        }
     }
 
     struct Prepared
@@ -312,14 +366,18 @@ namespace Cleanup::NuGetHttp
         Environment environment;
         Identity toolIdentity, rootIdentity;
         Handle toolGuard;
+        ExclusionPolicy exclusions;
     };
 
-    Preview Prepare(const std::stop_token stop)
+    Preview Prepare(const ExclusionPolicy& exclusions, const std::stop_token stop)
     {
         Preview result;
         auto prepared = std::make_shared<Prepared>();
         prepared->environment = Snapshot();
         if (stop.stop_requested()) { result.state = State::Cancelled; return result; }
+        prepared->exclusions = exclusions;
+        result.exclusionFailure = CheckExclusions(L"", exclusions, result.excludedDirectory, result.diagnostic);
+        if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
         const auto programFiles = Known(FOLDERID_ProgramFiles);
         prepared->tool = programFiles.empty() ? L"" : programFiles + L"\\dotnet\\dotnet.exe";
         result.tool = prepared->tool;
@@ -364,6 +422,8 @@ namespace Cleanup::NuGetHttp
         result.cachePath = prepared->root;
         prepared->command = L"\"" + prepared->tool + L"\" nuget locals http-cache --clear --force-english-output";
         result.command = prepared->command;
+        result.exclusionFailure = CheckExclusions(prepared->root, exclusions, result.excludedDirectory, result.diagnostic);
+        if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
         if (!SeparateCaches(listed.output, prepared->root))
         { result.state = State::Blocked; result.diagnostic = L"NuGet cache locations overlap or could not all be resolved. HTTP-only cleanup is blocked to preserve other caches."; return result; }
         if (expected.empty() || !Equal(expected, prepared->root))
@@ -381,7 +441,7 @@ namespace Cleanup::NuGetHttp
         return result;
     }
 
-    Result Execute(const Preview& preview, const std::stop_token stop)
+    Result Execute(const Preview& preview, const ExclusionPolicy& currentExclusions, const std::stop_token stop)
     {
         Result result;
         result.before = preview.before;
@@ -389,6 +449,10 @@ namespace Cleanup::NuGetHttp
         const auto prepared = preview.prepared;
         if (preview.state != State::Ready || !prepared || preview.tool != prepared->tool || preview.cachePath != prepared->root || preview.command != prepared->command)
         { result.state = State::Blocked; result.diagnostic = L"The displayed official-command scope is invalid or changed."; return result; }
+        result.exclusionFailure = CheckExclusions(prepared->root, currentExclusions, result.excludedDirectory, result.diagnostic);
+        if (result.exclusionFailure == ExclusionFailure::None && currentExclusions.text != prepared->exclusions.text)
+        { result.exclusionFailure = ExclusionFailure::Changed; result.diagnostic = L"Exclusion rules changed after preview. Reopen the official scope before confirming again."; }
+        if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
         std::vector<Handle> ancestors;
         Identity toolIdentity, rootIdentity;
         Handle root(CreateFileW(prepared->root.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
@@ -408,6 +472,8 @@ namespace Cleanup::NuGetHttp
         { result.state = stop.stop_requested() ? State::Cancelled : State::Blocked; result.diagnostic = L"The cache changed or became unsafe while reconfirming the official scope. No clear command was started."; return result; }
         CloseHandle(std::exchange(finalRoot.value, INVALID_HANDLE_VALUE));
         CloseHandle(std::exchange(root.value, INVALID_HANDLE_VALUE));
+        result.exclusionFailure = CheckExclusions(prepared->root, currentExclusions, result.excludedDirectory, result.diagnostic);
+        if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
         // The official CLI deletes its root directory too. Its path-based recursion is not an atomic,
         // identity-bound deletion; callers must warn about concurrent writers and partial completion.
         const auto run = Run(prepared->tool, L"nuget locals http-cache --clear --force-english-output", prepared->environment, prepared->cwd, stop);

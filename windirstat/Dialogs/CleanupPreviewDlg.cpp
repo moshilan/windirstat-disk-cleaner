@@ -706,7 +706,12 @@ void CCleanupPreviewDlg::OnWindowsDiskCleanup() { OpenWindowsCleanup(false); }
 void CCleanupPreviewDlg::OnNuGetHttp()
 {
     if (m_scanning) return;
-    CNuGetHttpCacheDlg dialog(this);
+    CNuGetHttpCacheDlg dialog(this, [this]
+    {
+        const auto text = m_exclusions.GetText();
+        // Failed saves and corrupt settings must not become an empty permissive policy.
+        return Cleanup::NuGetHttp::ExclusionPolicy{ !m_exclusionsCorrupt && text == m_savedExclusionsText, text };
+    });
     dialog.ShowModal();
     if (dialog.Started())
     {

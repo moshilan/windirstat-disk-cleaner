@@ -28,9 +28,21 @@ namespace
         default: return Localization::Lookup(IDS_NH_UNAVAILABLE);
         }
     }
+    std::wstring ExclusionMessage(const Cleanup::NuGetHttp::ExclusionFailure failure, const std::wstring& directory)
+    {
+        using enum Cleanup::NuGetHttp::ExclusionFailure;
+        switch (failure)
+        {
+        case Overlap: return Localization::Format(IDS_NH_EXCLUDED, directory);
+        case Unavailable: return Localization::Lookup(IDS_NH_EXCLUSIONS_UNAVAILABLE);
+        case Changed: return Localization::Lookup(IDS_NH_EXCLUSIONS_CHANGED);
+        default: return {};
+        }
+    }
 }
 
-CNuGetHttpCacheDlg::CNuGetHttpCacheDlg(WindowRef parent) : MessageTarget(IDD_NUGET_HTTP, nullptr, parent) {}
+CNuGetHttpCacheDlg::CNuGetHttpCacheDlg(WindowRef parent, std::function<Cleanup::NuGetHttp::ExclusionPolicy()> readExclusions)
+    : MessageTarget(IDD_NUGET_HTTP, nullptr, parent), m_readExclusions(std::move(readExclusions)) {}
 CNuGetHttpCacheDlg::~CNuGetHttpCacheDlg()
 {
     if (m_worker.joinable()) { m_worker.request_stop(); m_worker.join(); }
@@ -47,6 +59,8 @@ bool CNuGetHttpCacheDlg::OnInitDialog()
 void CNuGetHttpCacheDlg::Start(const bool execute)
 {
     if (m_busy) return;
+    // Read active rules on the UI thread, including again after the confirmation has closed.
+    const auto exclusions = m_readExclusions();
     m_busy = true;
     m_executing = execute;
     m_finished = false;
@@ -54,12 +68,12 @@ void CNuGetHttpCacheDlg::Start(const bool execute)
     GetDlgItem(IDC_NH_CLEAR).EnableWindow(false);
     GetDlgItem(IDC_NH_STOP).EnableWindow(true);
     SetText(IDC_NH_STATUS, Localization::Lookup(execute ? IDS_NH_RUNNING : IDS_NH_DETECTING));
-    m_worker = std::jthread([this, execute](std::stop_token stop)
+    m_worker = std::jthread([this, execute, exclusions](std::stop_token stop)
     {
         try
         {
-            if (execute) m_result = Cleanup::NuGetHttp::Execute(m_preview, stop);
-            else m_preview = Cleanup::NuGetHttp::Prepare(stop);
+            if (execute) m_result = Cleanup::NuGetHttp::Execute(m_preview, exclusions, stop);
+            else m_preview = Cleanup::NuGetHttp::Prepare(exclusions, stop);
         }
         catch (...) { m_error = true; }
         m_finished.store(true);
@@ -119,12 +133,16 @@ void CNuGetHttpCacheDlg::Refresh()
             Change(m_result.before.logicalBytes, m_result.after.logicalBytes),
             Change(m_result.before.availableBytes, m_result.after.availableBytes));
         details += L"\r\n" + m_result.diagnostic + L"\r\n" + m_result.output + L"\r\n\r\n" + scope;
-        SetText(IDC_NH_STATUS, StateName(m_result.state));
+        const auto protection = ExclusionMessage(m_result.exclusionFailure, m_result.excludedDirectory);
+        details = protection + (protection.empty() ? L"" : L"\r\n\r\n") + details;
+        SetText(IDC_NH_STATUS, protection.empty() ? StateName(m_result.state) : protection);
     }
     else
     {
         details += L"\r\n\r\n" + m_preview.diagnostic;
-        SetText(IDC_NH_STATUS, StateName(m_preview.state));
+        const auto protection = ExclusionMessage(m_preview.exclusionFailure, m_preview.excludedDirectory);
+        details = protection + (protection.empty() ? L"" : L"\r\n\r\n") + details;
+        SetText(IDC_NH_STATUS, protection.empty() ? StateName(m_preview.state) : protection);
     }
     std::wstring display;
     for (const auto c : details)

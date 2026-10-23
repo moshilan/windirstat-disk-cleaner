@@ -2,6 +2,7 @@
 #include <windows.h>
 #include <winioctl.h>
 #include <cstring>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -82,18 +83,19 @@ int wmain()
     try
     {
         wchar_t temp[32768]{}; Check(GetTempPathW(32768, temp) != 0, "Temporary root available");
+        const ExclusionPolicy noExclusions{ true, L"" };
         const auto run = fs::path(temp) / (L"WinDirStatTests-NuGet-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
         {
-            Fixture f(run, L"success"); auto p = Prepare();
+            Fixture f(run, L"success"); auto p = Prepare(noExclusions);
             if (p.state != State::Ready) std::wcerr << p.diagnostic << L"\n";
             Check(p.state == State::Ready && p.prepared && fs::equivalent(p.cachePath, f.http), "Official command resolves isolated actual scope");
             Check(p.command.find(L"http-cache") != std::wstring::npos && p.command.find(L" all ") == std::wstring::npos, "Only HTTP-cache command allowed");
             std::stop_source cancelled; cancelled.request_stop();
-            auto c = Execute(p, cancelled.get_token());
+            auto c = Execute(p, noExclusions, cancelled.get_token());
             Check(c.state == State::Cancelled && !c.started && fs::exists(f.http / L"source/a.dat"), "Pre-start cancellation performs no cleanup");
             auto forged = p; forged.cachePath = (f.root / L"project").wstring();
-            Check(!Execute(forged).started, "Modified displayed scope cannot execute");
-            auto r = Execute(p);
+            Check(!Execute(forged, noExclusions).started, "Modified displayed scope cannot execute");
+            auto r = Execute(p, noExclusions);
             if (r.state != State::Success) std::wcerr << r.diagnostic << L"\n" << r.output << L"\n";
             Check(r.started && r.state == State::Success && r.exitCode == 0, "Actual official HTTP-cache cleanup succeeds");
             Check(!fs::exists(f.http / L"source/a.dat") && !fs::exists(f.http / L"source/b.dat"), "Whole synthetic HTTP cache cleared");
@@ -103,40 +105,91 @@ int wmain()
             std::cout << "{\"case\":\"success_and_cancel\",\"cache_before\":19134,\"cache_after\":0,\"exit\":0}\n";
         }
         {
-            Fixture f(run, L"locked"); auto p = Prepare(); Check(p.state == State::Ready, "Locked case prepared");
+            Fixture f(run, L"locked"); auto p = Prepare(noExclusions); Check(p.state == State::Ready, "Locked case prepared");
             auto h = CreateFileW((f.http / L"source/a.dat").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
             Check(h != INVALID_HANDLE_VALUE, "Own file locked without delete sharing");
-            auto r = Execute(p); CloseHandle(h);
+            auto r = Execute(p, noExclusions); CloseHandle(h);
             Check(r.state == State::Failed && r.started && r.exitCode != 0, "Official locked-file failure retained");
             Check(Read(f.http / L"source/a.dat") == std::string(12345, 'a'), "Locked file unchanged");
             Check(r.after.logicalBytes && *r.after.logicalBytes >= 12345, "Failure measures surviving content"); f.Preserved();
             std::cout << "{\"case\":\"locked_partial_failure\",\"exit\":" << r.exitCode << "}\n";
         }
         {
-            Fixture f(run, L"replace"); auto p = Prepare(); Check(p.state == State::Ready, "Replacement case prepared");
+            Fixture f(run, L"replace"); auto p = Prepare(noExclusions); Check(p.state == State::Ready, "Replacement case prepared");
             fs::rename(f.http, f.root / L"original"); Write(f.http / L"replacement", "replacement");
-            Check(!Execute(p).started && Read(f.http / L"replacement") == "replacement", "Replaced root blocked before official cleanup"); f.Preserved();
+            Check(!Execute(p, noExclusions).started && Read(f.http / L"replacement") == "replacement", "Replaced root blocked before official cleanup"); f.Preserved();
         }
         {
             Fixture f(run, L"junction"); Junction(f.http / L"redirect", f.root / L"project");
-            auto p = Prepare(); Check(p.state == State::Blocked && !Execute(p).started, "Descendant junction blocks cleanup"); f.Preserved();
+            auto p = Prepare(noExclusions); Check(p.state == State::Blocked && !Execute(p, noExclusions).started, "Descendant junction blocks cleanup"); f.Preserved();
         }
         {
             Fixture f(run, L"hardlink");
             Check(CreateHardLinkW((f.http / L"linked").c_str(), (f.root / L"project/project.csproj").c_str(), nullptr), "Own hard link created");
-            auto p = Prepare(); Check(p.state == State::Blocked && !Execute(p).started, "Hard link blocks cleanup"); f.Preserved();
+            auto p = Prepare(noExclusions); Check(p.state == State::Blocked && !Execute(p, noExclusions).started, "Hard link blocks cleanup"); f.Preserved();
         }
         {
             Fixture f(run, L"override"); SetEnvironmentVariableW(L"NUGET_HTTP_CACHE_PATH", (f.root / L"project").c_str());
-            auto p = Prepare(); Check(p.state == State::Blocked && !Execute(p).started, "Unsafe actual override never falls back to standard cache"); f.Preserved();
+            auto p = Prepare(noExclusions); Check(p.state == State::Blocked && !Execute(p, noExclusions).started, "Unsafe actual override never falls back to standard cache"); f.Preserved();
         }
         {
             Fixture f(run, L"cache-alias");
             fs::rename(f.root / L"packages", f.root / L"saved-packages");
             Junction(f.root / L"packages", f.http);
-            auto p = Prepare(); Check(p.state == State::Blocked && !Execute(p).started, "Other cache junction aliasing HTTP blocks cleanup");
+            auto p = Prepare(noExclusions); Check(p.state == State::Blocked && !Execute(p, noExclusions).started, "Other cache junction aliasing HTTP blocks cleanup");
             Check(Read(f.root / L"saved-packages/sentinel") == "synthetic sentinel" && fs::exists(f.http / L"source/a.dat"),
                 "Aliased caches and preserved packages remain untouched");
+        }
+        {
+            Fixture f(run, L"exclusion-conflicts");
+            auto slashCase = f.http.wstring();
+            for (auto& c : slashCase) { if (c == L'\\') c = L'/'; else c = static_cast<wchar_t>(towupper(c)); }
+            const std::vector<std::wstring> conflicts{ f.http.wstring(), f.root.wstring(),
+                (f.http / L"source").wstring(), (f.http / L"not-created").wstring(), slashCase + L"/" };
+            for (const auto& directory : conflicts)
+            {
+                const ExclusionPolicy policy{ true, directory };
+                auto p = Prepare(policy);
+                Check(p.state == State::Blocked && p.exclusionFailure == ExclusionFailure::Overlap && !p.prepared,
+                    "Self, ancestor, child, missing child and normalized aliases block the whole official scope");
+                Check(!Execute(p, policy).started && fs::exists(f.http / L"source/a.dat"), "A blocked exclusion scope cannot be executed");
+            }
+            auto p = Prepare(noExclusions); Check(p.state == State::Ready, "Scope prepared before exclusion change");
+            auto r = Execute(p, { true, (f.http / L"source").wstring() });
+            Check(r.state == State::Blocked && r.exclusionFailure == ExclusionFailure::Overlap && !r.started,
+                "An exclusion introduced after preview blocks execution despite earlier confirmation");
+            r = Execute(p, { false, L"" });
+            Check(r.state == State::Blocked && r.exclusionFailure == ExclusionFailure::Unavailable && !r.started,
+                "Unavailable rules at execution cannot fall back to empty rules");
+            for (const auto& policy : { ExclusionPolicy{}, ExclusionPolicy{ true, L"relative-directory" } })
+            {
+                auto failed = Prepare(policy);
+                Check(failed.state == State::Blocked && failed.exclusionFailure == ExclusionFailure::Unavailable && !Execute(failed, policy).started,
+                    "Missing or invalid rules fail closed before cleanup");
+            }
+            wchar_t shortPath[32768]{};
+            Check(GetShortPathNameW(f.http.c_str(), shortPath, 32768) != 0, "Own cache short-path spelling obtained");
+            auto alias = Prepare({ true, std::wstring(shortPath) + L"\\missing-child" });
+            Check(alias.state == State::Blocked && alias.exclusionFailure == ExclusionFailure::Overlap,
+                "Missing excluded child under an existing short-path ancestor remains protected");
+            Junction(f.root / L"excluded-alias", f.http);
+            auto unsafe = Prepare({ true, (f.root / L"excluded-alias").wstring() });
+            Check(unsafe.state == State::Blocked && unsafe.exclusionFailure == ExclusionFailure::Unavailable && !unsafe.prepared,
+                "An excluded junction whose scope cannot be reliably checked blocks cleanup");
+            Check(Read(f.http / L"source/a.dat") == std::string(12345, 'a'), "Every blocked case preserves the entire HTTP payload");
+            f.Preserved();
+        }
+        {
+            Fixture f(run, L"exclusion-neighbor");
+            const ExclusionPolicy policy{ true, f.http.wstring() + L"-sibling" };
+            auto p = Prepare(policy); Check(p.state == State::Ready, "Similarly named excluded sibling does not overlap HTTP cache");
+            auto changed = Execute(p, { true, (f.root / L"project").wstring() });
+            Check(changed.state == State::Blocked && changed.exclusionFailure == ExclusionFailure::Changed && !changed.started,
+                "A different non-overlapping policy also requires fresh scope review");
+            auto r = Execute(p, policy);
+            Check(r.state == State::Success && r.started && r.after.logicalBytes && *r.after.logicalBytes == 0,
+                "Non-overlapping exclusions still allow normal confirmed official cleanup");
+            f.Preserved();
         }
         std::cout << "{\"status\":\"PASS\",\"checks\":" << checks << ",\"fixtures_retained\":true}\n";
         return 0;

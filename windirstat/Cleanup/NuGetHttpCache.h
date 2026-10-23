@@ -11,6 +11,12 @@
 namespace Cleanup::NuGetHttp
 {
     enum class State { Unavailable, Ready, Blocked, Success, Failed, Cancelled };
+    enum class ExclusionFailure { None, Unavailable, Overlap, Changed };
+    struct ExclusionPolicy
+    {
+        bool available = false; // Unavailable configuration must never mean an empty exclusion list.
+        std::wstring text;
+    };
     struct Measurement
     {
         std::optional<std::uint64_t> logicalBytes;
@@ -22,6 +28,8 @@ namespace Cleanup::NuGetHttp
         State state = State::Unavailable;
         std::wstring tool, cachePath, command, diagnostic;
         Measurement before;
+        ExclusionFailure exclusionFailure = ExclusionFailure::None;
+        std::wstring excludedDirectory;
         std::shared_ptr<const Prepared> prepared;
     };
     struct Result
@@ -31,9 +39,11 @@ namespace Cleanup::NuGetHttp
         bool started = false;
         Measurement before, after;
         std::wstring output, diagnostic;
+        ExclusionFailure exclusionFailure = ExclusionFailure::None;
+        std::wstring excludedDirectory;
     };
     // Discovery only. The caller must display the returned scope before asking for confirmation.
-    Preview Prepare(std::stop_token stop = {});
+    Preview Prepare(const ExclusionPolicy& exclusions, std::stop_token stop = {});
     // Only an unmodified Ready preview from Prepare is executable; confirmation belongs to the caller.
-    Result Execute(const Preview& preview, std::stop_token stop = {});
+    Result Execute(const Preview& preview, const ExclusionPolicy& currentExclusions, std::stop_token stop = {});
 }
