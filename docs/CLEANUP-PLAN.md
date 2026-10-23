@@ -97,4 +97,6 @@ AbsoluteControl仅为独立新样本的接口对照，不是Rooted的执行器�
 
 该实验不构成受限缓存后端的上线验收。依据[CreateFile共享语义](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)，属性/扩展属性访问不受普通共享标志完整约束；末次元数据/链接/流/保护规则观察和提交仍不是原子事务，既有DELETE能力也不自动随之后的ACL变化撤回。实测的文件ID绑定仅解决对象被同名替换的一部分风险。尚未证明应用已停止、载荷未被映射/特权代码改变、缓存确实可再生及配对清理语义；没有持久化提交日志、真实进程崩溃/掉电和未知结果恢复测试，不得自动重放。readyForRealFiles=false，正式执行继续阻断。测试的部分结果仅为2完成+1预检拒绝，不冒充处置API部分失败。
 
-云端实际结果记录在BUILD-BASELINE.md；未运行的场景不记通过。
+源码0104cf1的[标准Runner运行39910800414](https://github.com/moshilan/windirstat-disk-cleaner/actions/runs/39910800414)首次通过19个场景、290项检查。正常同句柄设置删除待定并在关闭后观察名称消失；替换前后、祖先junction、叶目录junction初次打开5、硬链接、占用32、受限文件访问5、只读/元数据/ADS及取消均按预期处理。保留句柄延迟最终处置、提交后取消只阻止后续项、2完成+1预检拒绝及1完成+2取消的逐项统计断言通过。没有复现处置API返回失败后的部分失败，不扩大覆盖口径。
+
+关键实测限制：持有GENERIC_READ|DELETE/FILE_SHARE_READ处置句柄时CreateHardLink仍成功，最后复核发现链接数增加而拒绝；FILE_WRITE_ATTRIBUTES专用句柄也能更改属性，最后复核拒绝。两者都说明普通共享守卫不足以保证所有资格从末次复核持续到提交。FILE_SHARE_READ仍允许兼容的普通读句柄，占用用例只证明普通写访问冲突被拒绝，不是全部句柄独占或应用退出保证。不能声称仅加共享守卫就消除了竞态。本轮不继续扩大实验，不接正式后端；实际构建与制品记录见BUILD-BASELINE.md。
