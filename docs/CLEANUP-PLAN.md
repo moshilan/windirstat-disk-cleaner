@@ -55,16 +55,18 @@
 
 元数据模拟不读取或散列载荷内容，不证明应用已退出、文件可回收、具有删除权限或未来能够安全执行。NTFS变更时间能发现普通同长度且还原创建/修改时间的改写，但不承诺识别特权进程伪造全部元数据。复核句柄在观察后关闭，祖先路径和规则状态仍存在观察间隙；未解决真实处置的TOCTOU、应用占用、配对缓存语义、Shell逐项回收、Windows维护API或实际空闲空间测量。任何真实执行都需要后续独立授权与专项验证，不能把模拟通过直接当作删除许可。
 
-## 隔离回收实验（待构建验证）
+## 隔离回收实验（正式执行阻断）
 
 用户另行授权仅测试程序自建合成数据的真实回收。新增tests/RecycleBinPrototype及其独立测试目标，不链接主程序，也不提供外部路径参数。每个实例在临时目录下创建随机全新根，以CREATE_NEW创建文件，从原创建句柄取得卷及文件ID，用ReOpenFile建立持续持有的对象凭据；只扫描该实例的锚点。其他实例或任意计划不能授予文件所有权。样本不自动删除，不枚举或清空已有回收站。
 
-计划后端Evaluate复用既有计划复核，合格项也返回BindingUnavailable，readyForRealFiles恒为false，不调用Shell。独立ShellControl仅作有真实副作用的接口实验，绝不能用于真实用户文件。它从固定本地NTFS卷逐级打开、校验并持有祖先目录句柄，拒绝重解析点及最终路径不一致，拒绝祖先普通写入和删除共享；末级实验句柄明确允许删除共享，以观察Shell行为，不能宣称这已绑定处置对象。
+计划后端Evaluate复用既有计划复核，合格项也返回BindingUnavailable，readyForRealFiles恒为false，不调用Shell。独立ShellControl仅作有真实副作用的接口实验，绝不能用于真实用户文件。它从固定本地NTFS卷逐级打开、校验并持有祖先目录句柄，拒绝重解析点及最终路径不一致，拒绝祖先普通写入和删除共享；末级实验句柄明确允许删除共享，以观察Shell行为，不能宣称这已绑定处置对象。固定祖先目录不等于冻结子项名称，仍可将原对象移出，再CREATE_NEW占用原名。
 
 微软[IFileOperation::DeleteItem](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifileoperation-deleteitem)接收IShellItem，没有已验证HANDLE或expected FILE_ID参数。[IFileSystemBindData2](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nn-shobjidl_core-ifilesystembinddata2)中的文件ID属于名称解析优化，未承诺最终处置原子比较。前置回调再次核验身份可以拒绝此前的替换，但回调返回到实际处置仍有竞态；禁止将其接入正式流程，禁止释放更严格的身份守卫后自动重试。
 
 实验显式设置[FOFX_RECYCLEONDELETE](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifileoperation-setoperationflags)，无提权标志、永久删除、Shell失败回退或自动重试。每次只入队一个自有普通文件，禁止关联元素及复制钩子。逐项记录入队、PerformOperations、GetAnyOperationsAborted、前后回调、真实hrDelete、新回收站对象及其身份；[PostDeleteItem](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-ifileoperationprogresssink-postdeleteitem)成功却无回收站新项必须记为未知/异常，不能事后视为已阻止永久删除。回收不是释放空间，实际释放仍记0。
 
-新增云端verification=recycle-experiment模式保留既有主程序构建和双语合成扫描，只运行新无界面实验，跳过旧核心及GUI场景，避免重复模拟及旧场景的ACL改动。权限实验使用当前账号受限令牌，不改ACL、不取得所有权。拟验证正常回收、祖先固定和重解析拒绝、身份锁冲突、权限失败、取消、回调前替换阻断、回调后替换反例及逐项部分失败。尚未运行，不能记为已通过。
+新增云端verification=recycle-experiment模式保留既有主程序构建和双语合成扫描，只运行新无界面实验，跳过旧核心及GUI场景，避免重复模拟及旧场景的ACL改动。权限实验使用当前账号受限令牌，不改ACL、不取得所有权。最终源码2d93690的[运行39894584072](https://github.com/moshilan/windirstat-disk-cleaner/actions/runs/39894584072)通过：主程序2分22.12秒、实验15.86秒，均0警告/0错误；45项检查0失败，正常回收后核对原ID、祖先固定及既有重解析拒绝、身份锁错误32、真实权限错误5、两处取消、跨实例拒绝；部分实验为2回收、1失败，统计与逐项结果一致。双语合成扫描输入不变。未重跑原GUI或原模拟全集，最终制品及摘要见BUILD-BASELINE。
+
+确定性反例中，前置回调核验旧对象后，用仍打开的原句柄将其改名至自建retained目录，再CREATE_NEW原名；全部原祖先守卫保持。Shell实际回收的新项精确匹配新receipt而不匹配旧ID，旧对象留在retained。回调前同样替换则被E_ABORT阻断，原对象与替代对象均保留。身份读取失败不能当作反例：既不匹配旧ID也不匹配新ID时记Unknown，停止实验。首轮同目录注入被守卫拒绝而失败的记录保留，未释放守卫或放宽断言来取得通过。
 
 进入正式清理仍缺少有文档保证的原子目标绑定、保护/规则提交点一致性、持久化开始与逐项日志、崩溃未知态及取消后的对账。本实验即使通过也不具备接入正式清理流程的条件。
