@@ -98,6 +98,7 @@ namespace Cleanup::NuGetHttp
         struct ProcessResult
         {
             bool started = false, cancelled = false, timedOut = false;
+            bool outputTruncated = false;
             DWORD exitCode = ERROR_PROCESS_ABORTED;
             std::wstring output, error;
         };
@@ -168,6 +169,7 @@ namespace Cleanup::NuGetHttp
                 {
                     DWORD received = 0;
                     if (!ReadFile(reader.value, buffer.data(), std::min<DWORD>(available, static_cast<DWORD>(buffer.size())), &received, nullptr) || received == 0) break;
+                    if (received > 65536 - output.size()) result.outputTruncated = true;
                     if (output.size() < 65536) output.append(buffer.data(), std::min<size_t>(received, 65536 - output.size()));
                 }
             };
@@ -358,11 +360,63 @@ namespace Cleanup::NuGetHttp
             }
             return ExclusionFailure::None;
         }
+        // An explicit empty --python overrides configuration-driven interpreter redirection (pip 22.3+).
+        constexpr auto PipArguments = L"-I -B -X utf8 -m pip --python= --disable-pip-version-check --no-input --log NUL ";
+        Environment PipEnvironment()
+        {
+            auto env = Snapshot();
+            env[L"PIP_DISABLE_PIP_VERSION_CHECK"] = L"1";
+            env[L"PIP_NO_INPUT"] = L"1";
+            env[L"PYTHONDONTWRITEBYTECODE"] = L"1";
+            if (const auto config = env.find(L"PIP_CONFIG_FILE"); config != env.end() && Equal(config->second, L"NUL"))
+                config->second = L"nul"; // pip compares this spelling to Python's os.devnull literally.
+            return env;
+        }
+        std::wstring PipEnvironmentFingerprint(const Environment& env)
+        {
+            std::wstring result;
+            for (const auto& [key, value] : env)
+                if (_wcsnicmp(key.c_str(), L"PIP_", 4) == 0 || _wcsnicmp(key.c_str(), L"PYTHON", 6) == 0 ||
+                    Equal(key, L"VIRTUAL_ENV") || Equal(key, L"CONDA_PREFIX")) result += key + L"=" + value + L"\n";
+            return result;
+        }
+        struct PipQuery
+        {
+            bool valid = false, cancelled = false;
+            std::wstring root, details, fingerprint;
+        };
+        PipQuery QueryPip(const std::wstring& tool, const Environment& env, const std::wstring& cwd, const std::stop_token stop)
+        {
+            PipQuery result;
+            // The chosen interpreter is explicit. Isolated mode excludes CWD, PYTHONPATH and user-site packages.
+            const auto identity = Run(tool, L"-I -B -X utf8 -c \"import sys,pip;print('executable: '+sys.executable);"
+                L"print('prefix: '+sys.prefix);print('base-prefix: '+sys.base_prefix);"
+                L"print('Python: '+sys.version.split()[0]);print('pip: '+pip.__version__);print('pip-module: '+pip.__file__)\"", env, cwd, stop);
+            result.cancelled = identity.cancelled;
+            if (!identity.started || identity.exitCode != 0 || identity.outputTruncated || identity.cancelled || identity.timedOut ||
+                !Equal(ListedPath(identity.output, L"executable"), tool) || ListedPath(identity.output, L"pip-module").empty()) return result;
+            const auto config = Run(tool, std::wstring(PipArguments) + L"config list", env, cwd, stop);
+            result.cancelled = config.cancelled;
+            // Configuration may contain credentials. Keep it only in memory; never return it as diagnostics/output.
+            if (!config.started || config.exitCode != 0 || config.outputTruncated || config.cancelled || config.timedOut) return result;
+            const auto location = Run(tool, std::wstring(PipArguments) + L"cache dir", env, cwd, stop);
+            result.cancelled = location.cancelled;
+            std::wstring text = location.output, error;
+            while (!text.empty() && (text.back() == L'\r' || text.back() == L'\n')) text.pop_back();
+            if (!location.started || location.exitCode != 0 || location.outputTruncated || location.cancelled || location.timedOut ||
+                !NormalizeDirectory(text, result.root, error)) return result;
+            result.details = identity.output;
+            result.fingerprint = identity.output + L"\n" + config.output;
+            result.valid = true;
+            return result;
+        }
     }
 
     struct Prepared
     {
+        Provider provider = Provider::NuGetHttp;
         std::wstring tool, root, command, cwd;
+        std::wstring environmentDetails, pipFingerprint, pipEnvironmentFingerprint;
         Environment environment;
         Identity toolIdentity, rootIdentity;
         Handle toolGuard;
@@ -441,13 +495,91 @@ namespace Cleanup::NuGetHttp
         return result;
     }
 
+    Preview PreparePip(const ExclusionPolicy& exclusions, const std::wstring& absolutePython, const std::stop_token stop)
+    {
+        Preview result;
+        result.provider = Provider::Pip;
+        auto prepared = std::make_shared<Prepared>();
+        prepared->provider = Provider::Pip;
+        prepared->environment = PipEnvironment();
+        prepared->pipEnvironmentFingerprint = PipEnvironmentFingerprint(prepared->environment);
+        prepared->exclusions = exclusions;
+        if (stop.stop_requested()) { result.state = State::Cancelled; return result; }
+        result.exclusionFailure = CheckExclusions(L"", exclusions, result.excludedDirectory, result.diagnostic);
+        if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
+        std::wstring error;
+        if (!NormalizeDirectory(absolutePython, prepared->tool, error) ||
+            !Equal(std::filesystem::path(prepared->tool).filename().wstring(), L"python.exe") || !HasSafeAncestors(prepared->tool))
+        { result.state = State::Blocked; result.diagnostic = L"Select an existing absolute python.exe from the intended trusted environment. No PATH or launcher fallback is used."; return result; }
+        result.tool = prepared->tool;
+        prepared->toolGuard.value = CreateFileW(prepared->tool.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (!prepared->toolGuard || !IdentityOf(prepared->toolGuard.value, prepared->toolIdentity))
+        { result.diagnostic = L"The selected Python interpreter is unavailable. No dependencies will be installed."; return result; }
+        prepared->cwd = std::filesystem::path(prepared->tool).root_path().wstring();
+        std::wstring expected;
+        const auto fixture = prepared->environment.find(L"WDS_CLEANUP_TEST_ROOT");
+        if (fixture != prepared->environment.end())
+        {
+            std::wstring local;
+            if (!ResolveTestFixture(fixture->second, local, error))
+            { result.state = State::Blocked; result.diagnostic = L"Invalid isolated fixture: " + error; return result; }
+            expected = fixture->second + L"\\PipCache";
+            const auto cache = prepared->environment.find(L"PIP_CACHE_DIR");
+            const auto config = prepared->environment.find(L"PIP_CONFIG_FILE");
+            std::wstring actualCache, configPath, fixturePath, fixtureCache;
+            if (cache == prepared->environment.end() || !NormalizeDirectory(cache->second, actualCache, error) ||
+                !NormalizeDirectory(expected, fixtureCache, error) || !Equal(actualCache, fixtureCache) || config == prepared->environment.end() ||
+                (!Equal(config->second, L"NUL") && (!NormalizeDirectory(config->second, configPath, error) ||
+                    !NormalizeDirectory(fixture->second, fixturePath, error) || !IsWithin(configPath, fixturePath) || !HasSafeAncestors(configPath))))
+            { result.state = State::Blocked; result.diagnostic = L"The isolated fixture requires its own explicit PipCache and NUL or fixture-owned pip configuration. Real-cache fallback is forbidden."; return result; }
+            expected = std::move(fixtureCache);
+        }
+        else
+        {
+            const auto local = Known(FOLDERID_LocalAppData);
+            if (!local.empty()) expected = local + L"\\pip\\Cache";
+        }
+        std::wstring normalizedExpected;
+        if (!NormalizeDirectory(expected, normalizedExpected, error))
+        { result.state = State::Blocked; result.diagnostic = L"The expected standard pip cache is unavailable."; return result; }
+        const auto query = QueryPip(prepared->tool, prepared->environment, prepared->cwd, stop);
+        if (query.cancelled) { result.state = State::Cancelled; return result; }
+        if (!query.valid)
+        { result.diagnostic = L"The selected interpreter cannot reliably query pip and its cache. pip 22.3+ in this isolated Python environment is required; nothing will be installed or switched automatically."; return result; }
+        prepared->root = query.root;
+        prepared->environmentDetails = query.details;
+        prepared->pipFingerprint = query.fingerprint;
+        prepared->command = L"\"" + prepared->tool + L"\" " + PipArguments + L"--cache-dir \"" + prepared->root + L"\" cache purge";
+        result.cachePath = prepared->root;
+        result.command = prepared->command;
+        result.environmentDetails = prepared->environmentDetails;
+        if (!Equal(normalizedExpected, prepared->root))
+        { result.state = State::Blocked; result.diagnostic = L"This pilot only clears the standard pip cache (or validated fixture). A custom or unexpected actual cache directory is blocked."; return result; }
+        if (IsWithin(prepared->tool, prepared->root) || IsWithin(ListedPath(query.details, L"pip-module"), prepared->root) ||
+            IsWithin(ListedPath(query.details, L"prefix"), prepared->root))
+        { result.state = State::Blocked; result.diagnostic = L"The pip cache overlaps the selected Python environment; cleanup is blocked."; return result; }
+        result.exclusionFailure = CheckExclusions(prepared->root, exclusions, result.excludedDirectory, result.diagnostic);
+        if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
+        std::vector<Handle> ancestors;
+        if (!GuardAncestors(prepared->root, ancestors) || !HasSafeAncestors(prepared->root) || !Inspect(prepared->root, result.before, stop))
+        { result.state = stop.stop_requested() ? State::Cancelled : State::Blocked; result.diagnostic = L"Pip cache path, reparse point, hard link, access or inspection limit check failed. No purge command started."; return result; }
+        Handle root(CreateFileW(prepared->root.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+        if (!root || !IdentityOf(root.value, prepared->rootIdentity))
+        { result.state = State::Blocked; result.diagnostic = L"The pip cache directory is absent or unavailable. No directory will be created."; return result; }
+        result.state = State::Ready;
+        result.prepared = std::move(prepared);
+        return result;
+    }
+
     Result Execute(const Preview& preview, const ExclusionPolicy& currentExclusions, const std::stop_token stop)
     {
         Result result;
         result.before = preview.before;
         if (stop.stop_requested()) { result.state = State::Cancelled; result.diagnostic = L"Cancelled before starting the clear command."; return result; }
         const auto prepared = preview.prepared;
-        if (preview.state != State::Ready || !prepared || preview.tool != prepared->tool || preview.cachePath != prepared->root || preview.command != prepared->command)
+        if (preview.state != State::Ready || !prepared || preview.provider != prepared->provider || preview.tool != prepared->tool ||
+            preview.cachePath != prepared->root || preview.command != prepared->command || preview.environmentDetails != prepared->environmentDetails)
         { result.state = State::Blocked; result.diagnostic = L"The displayed official-command scope is invalid or changed."; return result; }
         result.exclusionFailure = CheckExclusions(prepared->root, currentExclusions, result.excludedDirectory, result.diagnostic);
         if (result.exclusionFailure == ExclusionFailure::None && currentExclusions.text != prepared->exclusions.text)
@@ -455,28 +587,49 @@ namespace Cleanup::NuGetHttp
         if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
         std::vector<Handle> ancestors;
         Identity toolIdentity, rootIdentity;
-        Handle root(CreateFileW(prepared->root.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        // pip purges contents without deleting its root. Keep that name stable throughout its command.
+        const DWORD rootShare = FILE_SHARE_READ | FILE_SHARE_WRITE | (prepared->provider == Provider::Pip ? 0 : FILE_SHARE_DELETE);
+        Handle root(CreateFileW(prepared->root.c_str(), FILE_READ_ATTRIBUTES, rootShare,
             nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
         if (!IdentityOf(prepared->toolGuard.value, toolIdentity) || toolIdentity != prepared->toolIdentity || !root ||
             !IdentityOf(root.value, rootIdentity) || rootIdentity != prepared->rootIdentity ||
             !GuardAncestors(prepared->root, ancestors) || !HasSafeAncestors(prepared->root))
         { result.state = stop.stop_requested() ? State::Cancelled : State::Blocked; result.diagnostic = L"The cache identity or safety conditions changed after preview. The clear command was not started."; return result; }
-        const auto listed = Run(prepared->tool, L"nuget locals all --list --force-english-output", prepared->environment, prepared->cwd, stop);
-        if (listed.cancelled) { result.state = State::Cancelled; return result; }
-        if (listed.exitCode != 0 || !Equal(ListedPath(listed.output), prepared->root) || !SeparateCaches(listed.output, prepared->root))
-        { result.state = State::Blocked; result.diagnostic = L"The official HTTP cache scope could not be reconfirmed."; return result; }
-        Handle finalRoot(CreateFileW(prepared->root.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        if (prepared->provider == Provider::Pip)
+        {
+            if (PipEnvironmentFingerprint(PipEnvironment()) != prepared->pipEnvironmentFingerprint)
+            { result.state = State::Blocked; result.diagnostic = L"The pip/Python environment changed after preview. No purge command started."; return result; }
+        }
+        else
+        {
+            const auto listed = Run(prepared->tool, L"nuget locals all --list --force-english-output", prepared->environment, prepared->cwd, stop);
+            if (listed.cancelled) { result.state = State::Cancelled; return result; }
+            if (listed.exitCode != 0 || !Equal(ListedPath(listed.output), prepared->root) || !SeparateCaches(listed.output, prepared->root))
+            { result.state = State::Blocked; result.diagnostic = L"The official HTTP cache scope could not be reconfirmed."; return result; }
+        }
+        Handle finalRoot(CreateFileW(prepared->root.c_str(), FILE_READ_ATTRIBUTES, rootShare,
             nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
         if (!finalRoot || !IdentityOf(finalRoot.value, rootIdentity) || rootIdentity != prepared->rootIdentity ||
             !HasSafeAncestors(prepared->root) || !Inspect(prepared->root, result.before, stop))
         { result.state = stop.stop_requested() ? State::Cancelled : State::Blocked; result.diagnostic = L"The cache changed or became unsafe while reconfirming the official scope. No clear command was started."; return result; }
-        CloseHandle(std::exchange(finalRoot.value, INVALID_HANDLE_VALUE));
-        CloseHandle(std::exchange(root.value, INVALID_HANDLE_VALUE));
+        if (prepared->provider == Provider::NuGetHttp)
+        {
+            CloseHandle(std::exchange(finalRoot.value, INVALID_HANDLE_VALUE));
+            CloseHandle(std::exchange(root.value, INVALID_HANDLE_VALUE));
+        }
+        if (prepared->provider == Provider::Pip)
+        {
+            const auto query = QueryPip(prepared->tool, prepared->environment, prepared->cwd, stop);
+            if (query.cancelled) { result.state = State::Cancelled; return result; }
+            if (!query.valid || !Equal(query.root, prepared->root) || query.fingerprint != prepared->pipFingerprint ||
+                PipEnvironmentFingerprint(PipEnvironment()) != prepared->pipEnvironmentFingerprint)
+            { result.state = State::Blocked; result.diagnostic = L"The selected Python, pip configuration or cache scope changed or cannot be reconfirmed. No purge command started."; return result; }
+        }
         result.exclusionFailure = CheckExclusions(prepared->root, currentExclusions, result.excludedDirectory, result.diagnostic);
         if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
-        // The official CLI deletes its root directory too. Its path-based recursion is not an atomic,
-        // identity-bound deletion; callers must warn about concurrent writers and partial completion.
-        const auto run = Run(prepared->tool, L"nuget locals http-cache --clear --force-english-output", prepared->environment, prepared->cwd, stop);
+        // Official path-based deletion is not atomic. Cancellation may leave partial completion.
+        const auto arguments = prepared->provider == Provider::Pip ? std::wstring(PipArguments) + L"--cache-dir \"" + prepared->root + L"\" cache purge" : L"nuget locals http-cache --clear --force-english-output";
+        const auto run = Run(prepared->tool, arguments, prepared->environment, prepared->cwd, stop);
         result.started = run.started;
         result.exitCode = run.exitCode;
         result.output = run.output;

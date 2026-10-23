@@ -78,7 +78,91 @@ struct Fixture
         for (const auto& p : sentinels) Check(Read(p) == "synthetic sentinel", "Other caches and project files unchanged");
     }
 };
-int wmain()
+static void TestPip(const fs::path& run, const std::wstring& python, const std::wstring& withoutPip)
+{
+    const ExclusionPolicy none{ true, L"" };
+    const auto setup = [](const Fixture& f)
+    {
+        const auto cache = f.root / L"PipCache";
+        SetEnvironmentVariableW(L"PIP_CACHE_DIR", cache.c_str());
+        SetEnvironmentVariableW(L"PIP_CONFIG_FILE", L"NUL");
+        SetEnvironmentVariableW(L"PIP_PYTHON", nullptr);
+        SetEnvironmentVariableW(L"PIP_LOG", nullptr);
+        Write(cache / L"http" / L"old.body", std::string(12345, 'a'));
+        Write(cache / L"http-v2" / L"new.body", std::string(6789, 'b'));
+        Write(cache / L"wheels" / L"hash" / L"synthetic-1-py3-none-any.whl", std::string(4097, 'c'));
+        Write(cache / L"unmanaged-sentinel", "keep");
+        return cache;
+    };
+    {
+        Fixture f(run, L"pip-success"); const auto cache = setup(f);
+        SetEnvironmentVariableW(L"PIP_PYTHON", withoutPip.c_str());
+        SetEnvironmentVariableW(L"PIP_LOG", (f.root / L"project/should-not-be-written.log").c_str());
+        auto p = PreparePip(none, python);
+        if (p.state != State::Ready) std::wcerr << p.diagnostic << L"\n";
+        Check(p.state == State::Ready && p.provider == Provider::Pip && fs::equivalent(p.cachePath, cache), "Selected Python reports its actual isolated pip cache");
+        Check(!p.environmentDetails.empty() && p.command.find(L"cache purge") != std::wstring::npos && p.command.find(python) != std::wstring::npos,
+            "Pip scope exposes selected interpreter, environment identity and fixed purge command");
+        std::stop_source stop; stop.request_stop();
+        auto r = Execute(p, none, stop.get_token());
+        Check(r.state == State::Cancelled && !r.started && fs::exists(cache / L"http/old.body"), "Cancelled pip request starts no purge");
+        auto forged = p; forged.provider = Provider::NuGetHttp;
+        Check(!Execute(forged, none).started, "Provider identity cannot be changed after pip scope review");
+        Check(!Execute(p, { true, (cache / L"wheels").wstring() }).started, "An excluded wheel subtree blocks the entire pip purge");
+        r = Execute(p, none);
+        if (r.state != State::Success) std::wcerr << r.diagnostic << L"\n" << r.output << L"\n";
+        Check(r.state == State::Success && r.started && r.exitCode == 0, "Official pip purge succeeds on synthetic cache only");
+        Check(!fs::exists(f.root / L"project/should-not-be-written.log"), "Pinned pip logging never writes a configured project log");
+        Check(!fs::exists(cache / L"http/old.body") && !fs::exists(cache / L"http-v2/new.body") &&
+            !fs::exists(cache / L"wheels/hash/synthetic-1-py3-none-any.whl"), "Official purge clears legacy HTTP, current HTTP and wheel contents");
+        Check(Read(cache / L"unmanaged-sentinel") == "keep" && r.before.logicalBytes && *r.before.logicalBytes == 23235 &&
+            r.after.logicalBytes && *r.after.logicalBytes == 4, "Pip result measures retained unmanaged files instead of assuming an empty directory");
+        Check(Read(f.http / L"source/a.dat") == std::string(12345, 'a'), "NuGet HTTP cache survives pip purge"); f.Preserved();
+        std::cout << "{\"case\":\"pip_success_cancel\",\"before\":23235,\"after\":4,\"exit\":0}\n";
+    }
+    {
+        Fixture f(run, L"pip-locked"); const auto cache = setup(f); auto p = PreparePip(none, python);
+        Check(p.state == State::Ready, "Locked pip scope prepared");
+        auto h = CreateFileW((cache / L"http-v2/new.body").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        Check(h != INVALID_HANDLE_VALUE, "Own pip HTTP payload locked");
+        auto r = Execute(p, none); CloseHandle(h);
+        Check(r.state == State::Failed && r.started && r.exitCode != 0, "Pip locked-file failure never falls back to other cleanup");
+        Check(Read(cache / L"http-v2/new.body") == std::string(6789, 'b') && Read(cache / L"unmanaged-sentinel") == "keep", "Locked and unmanaged pip contents remain"); f.Preserved();
+    }
+    {
+        Fixture f(run, L"pip-guards"); const auto cache = setup(f);
+        auto blocked = PreparePip({ true, (cache / L"wheels").wstring() }, python);
+        Check(blocked.state == State::Blocked && blocked.exclusionFailure == ExclusionFailure::Overlap && !blocked.prepared, "Pip preparation enforces exclusions");
+        blocked = PreparePip({}, python);
+        Check(blocked.state == State::Blocked && !blocked.prepared, "Unknown pip exclusions fail closed");
+        auto p = PreparePip(none, python); Check(p.state == State::Ready, "Pip scope prepared before environment change");
+        SetEnvironmentVariableW(L"PIP_CACHE_DIR", (f.root / L"project").c_str());
+        Check(!Execute(p, none).started, "Changing pip cache environment after review blocks execution");
+        SetEnvironmentVariableW(L"PIP_CACHE_DIR", cache.c_str());
+        const auto config = f.root / L"pip-test.ini";
+        Write(config, "[global]\ntimeout = 15\nindex-url = https://synthetic-user:synthetic-password@example.invalid/simple\n");
+        SetEnvironmentVariableW(L"PIP_CONFIG_FILE", config.c_str());
+        p = PreparePip(none, python); Check(p.state == State::Ready, "Selected pip configuration fingerprint captured");
+        Check((p.diagnostic + p.environmentDetails + p.command).find(L"synthetic-password") == std::wstring::npos,
+            "Configuration credentials stay out of displayed pip scope and diagnostics");
+        Write(config, "[global]\ntimeout = 16\nindex-url = https://synthetic-user:synthetic-password@example.invalid/simple\n");
+        Check(!Execute(p, none).started && fs::exists(cache / L"http/old.body"), "Pip config file changes block purge even when directory is unchanged");
+        SetEnvironmentVariableW(L"PIP_CONFIG_FILE", L"NUL");
+        auto missing = PreparePip(none, withoutPip);
+        Check(missing.state == State::Unavailable && !missing.prepared && !Execute(missing, none).started,
+            "A selected environment without pip never falls back to another Python");
+        p = PreparePip(none, python); Check(p.state == State::Ready, "Pip scope prepared before directory replacement");
+        fs::rename(cache, f.root / L"retained-pip"); Write(cache / L"replacement", "replacement");
+        Check(!Execute(p, none).started && Read(cache / L"replacement") == "replacement", "Replaced pip cache identity blocks official purge"); f.Preserved();
+    }
+    {
+        Fixture f(run, L"pip-junction"); const auto cache = setup(f);
+        Junction(cache / L"linked", f.root / L"project");
+        auto p = PreparePip(none, python);
+        Check(p.state == State::Blocked && !Execute(p, none).started, "A pip cache junction fails closed"); f.Preserved();
+    }
+}
+int wmain(int argc, wchar_t** argv)
 {
     try
     {
@@ -191,6 +275,8 @@ int wmain()
                 "Non-overlapping exclusions still allow normal confirmed official cleanup");
             f.Preserved();
         }
+        if (argc == 3) TestPip(run, argv[1], argv[2]);
+        else Check(argc == 1, "Pip tests require explicit normal and no-pip interpreter paths");
         std::cout << "{\"status\":\"PASS\",\"checks\":" << checks << ",\"fixtures_retained\":true}\n";
         return 0;
     }

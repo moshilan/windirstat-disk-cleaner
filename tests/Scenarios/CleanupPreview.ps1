@@ -377,6 +377,11 @@ function Test-CleanupPreview {
         $runner.Environment.NUGET_SCRATCH = Join-Path $root 'scratch'
         $runner.Environment.NUGET_PLUGINS_CACHE_PATH = Join-Path $root 'plugins'
     }
+    if ($Case.ContainsKey('PipTools')) {
+        $runner.Environment.WDS_PIP_TEST_PYTHON = (Get-Command python -CommandType Application -ErrorAction Stop).Source
+        $runner.Environment.PIP_CACHE_DIR = Join-Path $root 'PipCache'
+        $runner.Environment.PIP_CONFIG_FILE = 'NUL'
+    }
     $app = Start-TestApp -Runner $runner
     $selection = Wait-Until { Get-AppDialog $app 'IDC_SCAN_DUPLICATES' } 'Initial target selection is cancelled without scanning any disk'
     Close-AppDialog $selection
@@ -551,12 +556,12 @@ function Test-CleanupPreview {
         'Full candidate path is available outside clipped columns' | Out-Null
     Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root 'cleanup-preview.png')
 
-    if ($Case.ContainsKey('WindowsTools') -or $Case.ContainsKey('NuGetTools')) {
+    if ($Case.ContainsKey('WindowsTools') -or $Case.ContainsKey('NuGetTools') -or $Case.ContainsKey('PipTools')) {
         if ($Case.ContainsKey('WindowsTools') -and $Case.Language -eq 9) { Test-CleanupWindowsLaunch $app $dialog }
         Assert-Sequence @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash | ForEach-Object Hash) `
             @($before.Hash) 'Windows launch and cancellation leave every synthetic payload unchanged'
-        if ($Case.ContainsKey('NuGetTools')) {
-            Test-NuGetHttpFlow $app $dialog $root $Context
+        if ($Case.ContainsKey('NuGetTools') -or $Case.ContainsKey('PipTools')) {
+            Test-NuGetHttpFlow $app $dialog $root $Context -Pip:($Case.ContainsKey('PipTools'))
             Assert-Sequence @($before.Path | Get-FileHash | ForEach-Object Hash) @($before.Hash) `
                 'Official HTTP cleanup leaves all original preview and user-data sentinels unchanged'
         }
@@ -806,3 +811,7 @@ Register-Scenario cleanup.nuget CleanupPreview 'Official NuGet HTTP scope, cance
     Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 9; FontSize = 100; NuGetTools = $true }
 Register-Scenario cleanup.nuget.zh CleanupPreview 'Chinese official NuGet HTTP confirmation and synthetic cleanup' `
     Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 30724; FontSize = 200; NuGetTools = $true }
+Register-Scenario cleanup.pip CleanupPreview 'Selected Python official pip purge, exclusions, cancel and failure on synthetic cache' `
+    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 9; FontSize = 100; PipTools = $true }
+Register-Scenario cleanup.pip.zh CleanupPreview 'Chinese selected Python pip cache scope and confirmation' `
+    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 30724; FontSize = 200; PipTools = $true }

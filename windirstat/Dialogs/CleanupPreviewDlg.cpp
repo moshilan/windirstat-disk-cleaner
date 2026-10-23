@@ -251,7 +251,8 @@ bool CCleanupPreviewDlg::OnInitDialog()
     m_layout.AddControl(IDC_CP_NOTICE, 0, 0, 1, 0);
     m_layout.AddControl(IDC_CP_WINDOWS_RECOMMENDATIONS, 0, 0, 0, 0);
     m_layout.AddControl(IDC_CP_WINDOWS_DISK, 0, 0, 0, 0);
-    m_layout.AddControl(IDC_CP_NUGET, 0, 0, 1, 0);
+    m_layout.AddControl(IDC_CP_NUGET, 0, 0, 0, 0);
+    m_layout.AddControl(IDC_CP_PIP, 0, 0, 1, 0);
     m_layout.AddControl(IDC_CP_WINDOWS_NOTICE, 0, 0, 1, 0);
     m_layout.AddControl(IDC_CP_CATEGORIES, 0, 0, 1, 0);
     m_layout.AddControl(IDC_CP_FILES, 0, 0, 1, 1);
@@ -511,7 +512,7 @@ void CCleanupPreviewDlg::SetScanning(const bool scanning)
     for (const auto id : { IDC_CP_CATEGORIES, IDC_CP_EXCLUSIONS, IDC_CP_ADD_EXCLUSION }) GetDlgItem(id).EnableWindow(!scanning && m_optionsValid);
     GetDlgItem(IDC_CP_SCAN).EnableWindow(!scanning && m_optionsValid);
     GetDlgItem(IDC_CP_CANCEL).EnableWindow(scanning);
-    for (const auto id : { IDC_CP_WINDOWS_RECOMMENDATIONS, IDC_CP_WINDOWS_DISK, IDC_CP_NUGET }) GetDlgItem(id).EnableWindow(!scanning);
+    for (const auto id : { IDC_CP_WINDOWS_RECOMMENDATIONS, IDC_CP_WINDOWS_DISK, IDC_CP_NUGET, IDC_CP_PIP }) GetDlgItem(id).EnableWindow(!scanning);
     GetDlgItem(IDC_CP_PLAN).EnableWindow(!scanning && m_valid && !m_result.incomplete && !m_result.cancelled &&
         !m_result.limitReached && m_result.failures == 0 && std::ranges::any_of(m_selected, [](bool value) { return value; }));
     for (const auto id : { IDC_CP_FILES, IDC_CP_SELECT_ALL, IDC_CP_SELECT_NONE, IDC_CP_SORT_SIZE, IDC_CP_HIDE_ZERO }) GetDlgItem(id).EnableWindow(!scanning && m_valid);
@@ -705,18 +706,49 @@ void CCleanupPreviewDlg::OnWindowsRecommendations() { OpenWindowsCleanup(true); 
 void CCleanupPreviewDlg::OnWindowsDiskCleanup() { OpenWindowsCleanup(false); }
 void CCleanupPreviewDlg::OnNuGetHttp()
 {
+    OpenOfficialCache();
+}
+void CCleanupPreviewDlg::OnPipCache()
+{
     if (m_scanning) return;
+    std::wstring python;
+    if (::GetEnvironmentVariableW(L"WDS_CLEANUP_TEST_ROOT", nullptr, 0) != 0)
+    {
+        // A fixture never falls back to interactive discovery or a different Python environment.
+        if (!m_fixture || !m_optionsValid) { SetText(IDC_CP_STATUS, Localization::Lookup(IDS_PH_UNAVAILABLE)); return; }
+        const auto length = ::GetEnvironmentVariableW(L"WDS_PIP_TEST_PYTHON", nullptr, 0);
+        if (length != 0)
+        {
+            python.resize(length);
+            const auto copied = ::GetEnvironmentVariableW(L"WDS_PIP_TEST_PYTHON", python.data(), length);
+            if (copied == 0 || copied >= length) python.clear();
+            else python.resize(copied);
+        }
+        if (python.empty()) { SetText(IDC_CP_STATUS, Localization::Lookup(IDS_PH_UNAVAILABLE)); return; }
+    }
+    else
+    {
+        const auto selected = CDialog::PickFile(CDialog::FilePickerMode::Open, Localization::Lookup(IDS_PH_PICK_FILTER), this);
+        if (!selected) { SetText(IDC_CP_STATUS, Localization::Lookup(IDS_PH_PICK_CANCELLED)); return; }
+        python = *selected;
+    }
+    OpenOfficialCache(std::move(python));
+}
+void CCleanupPreviewDlg::OpenOfficialCache(std::wstring python)
+{
+    if (m_scanning) return;
+    const bool pip = !python.empty();
     CNuGetHttpCacheDlg dialog(this, [this]
     {
         const auto text = m_exclusions.GetText();
         // Failed saves and corrupt settings must not become an empty permissive policy.
         return Cleanup::NuGetHttp::ExclusionPolicy{ !m_exclusionsCorrupt && text == m_savedExclusionsText, text };
-    });
+    }, std::move(python));
     dialog.ShowModal();
     if (dialog.Started())
     {
         InvalidatePreview();
-        SetText(IDC_CP_STATUS, Localization::Lookup(IDS_NH_RESCAN));
+        SetText(IDC_CP_STATUS, Localization::Lookup(pip ? IDS_PH_RESCAN : IDS_NH_RESCAN));
     }
 }
 void CCleanupPreviewDlg::OpenWindowsCleanup(const bool recommendations)

@@ -22,6 +22,8 @@ private:
     void OnWindowsRecommendations();
     void OnWindowsDiskCleanup();
     void OnNuGetHttp();
+    void OnPipCache();
+    void OpenOfficialCache(std::wstring python = {});
     void OpenWindowsCleanup(bool recommendations);
     void OnStop();
     void OnSelectAll();
@@ -103,6 +105,7 @@ inline std::span<const RouteEntry> CCleanupPreviewDlg::Routes()
         Route::Control<&OnWindowsRecommendations>(BN_CLICKED, IDC_CP_WINDOWS_RECOMMENDATIONS),
         Route::Control<&OnWindowsDiskCleanup>(BN_CLICKED, IDC_CP_WINDOWS_DISK),
         Route::Control<&OnNuGetHttp>(BN_CLICKED, IDC_CP_NUGET),
+        Route::Control<&OnPipCache>(BN_CLICKED, IDC_CP_PIP),
         Route::Control<&OnStop>(BN_CLICKED, IDC_CP_CANCEL),
         Route::Control<&OnSelectAll>(BN_CLICKED, IDC_CP_SELECT_ALL),
         Route::Control<&OnSelectNone>(BN_CLICKED, IDC_CP_SELECT_NONE),

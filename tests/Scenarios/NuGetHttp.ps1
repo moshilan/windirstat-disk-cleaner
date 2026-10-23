@@ -1,8 +1,11 @@
 function Test-NuGetHttpFlow {
-    param($App, [IntPtr] $Preview, [string] $Root, $Context)
-    $http = Join-Path $Root 'NuGetHttp'
-    $a = New-TestFile (Join-Path $http 'source\recent.dat') 12345
-    $b = New-TestFile (Join-Path $http 'source\unchecked.dat') 6789
+    param($App, [IntPtr] $Preview, [string] $Root, $Context, [switch] $Pip)
+    $http = Join-Path $Root $(if ($Pip) { 'PipCache' } else { 'NuGetHttp' })
+    $entry = if ($Pip) { 'IDC_CP_PIP' } else { 'IDC_CP_NUGET' }
+    $command = if ($Pip) { 'cache purge' } else { 'http-cache --clear' }
+    $imagePrefix = if ($Pip) { 'pip-cache' } else { 'nuget-http' }
+    $a = New-TestFile (Join-Path $http $(if ($Pip) { 'http-v2\recent.body' } else { 'source\recent.dat' })) 12345
+    $b = New-TestFile (Join-Path $http $(if ($Pip) { 'wheels\hash\synthetic-1-py3-none-any.whl' } else { 'source\unchecked.dat' })) 6789
     $sentinels = @('packages','scratch','plugins','project' | ForEach-Object {
         New-TestFile (Join-Path $Root "$_\nuget-sentinel") 4097
     })
@@ -10,7 +13,7 @@ function Test-NuGetHttpFlow {
     $httpHashes = @($a,$b | Get-FileHash | ForEach-Object Hash)
     foreach ($rule in @($http, (Join-Path $http 'source'), 'relative-directory')) {
         Set-CleanupExclusions $Preview $rule
-        [void][TestDesktop]::PostMessage((Get-DialogControl $Preview 'IDC_CP_NUGET'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        [void][TestDesktop]::PostMessage((Get-DialogControl $Preview $entry), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
         $blocked = Wait-Until { Get-AppDialog $App 'IDC_NH_CLEAR' } 'Official scope review opens with current exclusions'
         $clearBlocked = Get-DialogControl $blocked 'IDC_NH_CLEAR'
         $stopBlocked = Get-DialogControl $blocked 'IDC_NH_STOP'
@@ -31,8 +34,8 @@ function Test-NuGetHttpFlow {
     }
     Set-CleanupExclusions $Preview (Join-Path $Root 'project')
     foreach ($attempt in 'success','failure') {
-        [void][TestDesktop]::PostMessage((Get-DialogControl $Preview 'IDC_CP_NUGET'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
-        $dialog = Wait-Until { Get-AppDialog $App 'IDC_NH_CLEAR' } 'Independent official NuGet scope dialog opens'
+        [void][TestDesktop]::PostMessage((Get-DialogControl $Preview $entry), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        $dialog = Wait-Until { Get-AppDialog $App 'IDC_NH_CLEAR' } 'Independent official cache scope dialog opens'
         $clear = Get-DialogControl $dialog 'IDC_NH_CLEAR'
         $stop = Get-DialogControl $dialog 'IDC_NH_STOP'
         Wait-Until { -not [TestDesktop]::IsWindowEnabled($stop) } 'Official command discovery finishes' -StableMilliseconds 350 | Out-Null
@@ -40,9 +43,9 @@ function Test-NuGetHttpFlow {
         $details = [TestDesktop]::ControlText($detailsControl)
         $statusControl = Get-DialogControl $dialog 'IDC_NH_STATUS'
         Assert-True ([TestDesktop]::IsWindowEnabled($clear)) ('Installed SDK and isolated scope are usable: ' + $details)
-        Assert-True ($details.Contains($http) -and $details.Contains('http-cache --clear')) 'Actual official scope and fixed command are displayed'
+        Assert-True ($details.Contains($http) -and $details.Contains($command)) 'Actual official scope and fixed command are displayed'
         $notice = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_NH_NOTICE'))
-        Assert-True ($notice -match 'ENTIRE|整个') 'The entire HTTP cache scope is explicit'
+        Assert-True ($notice -match 'ENTIRE|整个|全量') 'The entire HTTP cache scope is explicit'
         Assert-True ($notice -match 'unchecked|未勾选') 'Official cleanup is independent of preview selection'
         Assert-True ($notice -match 'excluded directory|排除目录') 'Exclusion overlap is an explicit non-overridable guard'
         Assert-True ($notice -match 'undone|撤销') 'Irreversible impact is visible before confirmation'
@@ -61,7 +64,7 @@ function Test-NuGetHttpFlow {
             Wait-Until { [TestDesktop]::ControlText($statusControl) -match 'Confirmation cancelled|已取消确认' } 'Pre-start cancellation is reported' | Out-Null
             Assert-True ((Test-Path -LiteralPath $a) -and (Test-Path -LiteralPath $b)) 'Confirmation cancellation clears no file'
             Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_TOTALS'))) $totals 'Cancelled official operation preserves preview totals'
-            Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root 'nuget-http-scope.png')
+            Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root ($imagePrefix + '-scope.png'))
         }
         $locked = $null
         try {
@@ -77,7 +80,7 @@ function Test-NuGetHttpFlow {
                 Assert-True ($status -match 'command succeeded|命令执行成功') 'Command success is presented separately from space claims'
                 Assert-True (-not (Test-Path -LiteralPath $a) -and -not (Test-Path -LiteralPath $b)) 'Confirmed official operation clears both recent and unchecked synthetic files'
                 Assert-True ($result -match '19134' -and $result -match 'after: 0 B|清理后缓存字节：0 B') 'Measured cache bytes show actual contents before and after'
-                Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root 'nuget-http-result.png')
+                Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root ($imagePrefix + '-result.png'))
             } else {
                 Assert-True ($status -match 'failed|失败') 'Locked-file official failure is visible'
                 Assert-True (Test-Path -LiteralPath $a) 'A locked file survives without permission changes or fallback deletion'
@@ -89,8 +92,8 @@ function Test-NuGetHttpFlow {
         Wait-Until { [TestDesktop]::IsWindowEnabled($Preview) } 'The official result returns to the preview' | Out-Null
         Assert-Equal ([NativeListViewHelper]::GetItemCount((Get-DialogControl $Preview 'IDC_CP_FILES'))) 0 'An executed official operation invalidates stale candidate rows'
         if ($attempt -eq 'success') {
-            $a = New-TestFile (Join-Path $http 'source\locked.dat') 12345
-            New-TestFile (Join-Path $http 'source\free.dat') 6789 | Out-Null
+            $a = New-TestFile (Join-Path $http $(if ($Pip) { 'http-v2\locked.body' } else { 'source\locked.dat' })) 12345
+            New-TestFile (Join-Path $http $(if ($Pip) { 'wheels\hash\free-1-py3-none-any.whl' } else { 'source\free.dat' })) 6789 | Out-Null
         }
     }
     Set-CleanupExclusions $Preview ''
