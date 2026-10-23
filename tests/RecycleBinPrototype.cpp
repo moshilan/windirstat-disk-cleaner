@@ -172,9 +172,9 @@ namespace RecycleExperiment
         const auto index = (std::uint64_t(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
         memcpy(receipt.identity.fileId.data(), &index, sizeof(index));
         // Derive ownership from CREATE_NEW itself, never by closing and reopening its name.
-        HANDLE retained = ReOpenFile(writer.get(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
-        if (retained == INVALID_HANDLE_VALUE) throw std::runtime_error("Retain creating object failed");
-        receipt.retained.reset(retained);
+        HANDLE receiptHandle = ReOpenFile(writer.get(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, 0);
+        if (receiptHandle == INVALID_HANDLE_VALUE) throw std::runtime_error("Retain creating object failed");
+        receipt.retained.reset(receiptHandle);
         if (!Identity(receipt.retained.get(), receipt.identity)) throw std::runtime_error("Receipt identity mismatch");
         writer.reset();
         receipts.push_back(std::move(receipt)); return receipts.size() - 1;
