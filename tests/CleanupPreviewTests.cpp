@@ -399,7 +399,7 @@ static void RunPlanGuardTests(const fs::path& root, std::uint64_t now, std::uint
 static void SpaceRecheckMocks()
 {
     using namespace Cleanup::SpaceRecheck;
-    Snapshot baseline;
+    Cleanup::SpaceRecheck::Snapshot baseline;
     Check(!Comparable(baseline, baseline), "Unmeasured snapshots cannot be compared");
     baseline.state = State::Ready;
     baseline.root = L"C:\\";
