@@ -11,7 +11,7 @@
 namespace Cleanup::NuGetHttp
 {
     enum class State { Unavailable, Ready, Blocked, Success, Failed, Cancelled };
-    enum class Provider { NuGetHttp, Pip };
+    enum class Provider { NuGetHttp, Pip, Npm };
     enum class ExclusionFailure { None, Unavailable, Overlap, Changed };
     struct ExclusionPolicy
     {
@@ -49,6 +49,7 @@ namespace Cleanup::NuGetHttp
     Preview Prepare(const ExclusionPolicy& exclusions, std::stop_token stop = {});
     // The caller selects the intended trusted interpreter; this never searches PATH or installs pip.
     Preview PreparePip(const ExclusionPolicy& exclusions, const std::wstring& absolutePython, std::stop_token stop = {});
+    Preview PrepareNpm(const ExclusionPolicy& exclusions, const std::wstring& absoluteNode, std::stop_token stop = {});
     // Only an unmodified Ready preview from Prepare is executable; confirmation belongs to the caller.
     Result Execute(const Preview& preview, const ExclusionPolicy& currentExclusions, std::stop_token stop = {});
 }

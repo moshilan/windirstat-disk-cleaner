@@ -365,6 +365,10 @@ function Test-CleanupPreview {
     New-CleanupFixtureFile (Join-Path $roaming 'Code\Backups\unsaved.txt') | Out-Null
     New-CleanupFixtureFile (Join-Path $roaming 'Code\CachedData\not-a-commit\personal.txt') -AgeDays 100 | Out-Null
     New-CleanupFixtureFile (Join-Path $roaming 'Code\CachedData\0123456789abcdef0123456789abcdef01234567\ten-days.bin') | Out-Null
+    if ($Case.ContainsKey('NpmTools')) {
+        '' | Set-Content -LiteralPath (Join-Path $root 'npm-test.ini') -Encoding utf8
+        '' | Set-Content -LiteralPath (Join-Path $root 'npm-global.ini') -Encoding utf8
+    }
     $before = @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash)
     $desktop = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
     $fontSize = if ($Case.FontSize -eq 200 -and ($desktop.Width -lt 2000 -or $desktop.Height -lt 1600)) { 100 } else { $Case.FontSize }
@@ -385,6 +389,15 @@ function Test-CleanupPreview {
         $runner.Environment.PIP_CACHE_DIR = Join-Path $root 'PipCache'
         $runner.Environment.PIP_CONFIG_FILE = 'NUL'
     }
+    if ($Case.ContainsKey('NpmTools')) {
+        if (-not $env:WDS_TEST_NODE -or -not [IO.Path]::IsPathFullyQualified($env:WDS_TEST_NODE)) {
+            throw 'Npm GUI tests require one explicitly selected WDS_TEST_NODE runtime.'
+        }
+        $runner.Environment.WDS_NPM_TEST_NODE = $env:WDS_TEST_NODE
+        $runner.Environment.NPM_CONFIG_CACHE = Join-Path $root 'NpmCache'
+        $runner.Environment.NPM_CONFIG_USERCONFIG = Join-Path $root 'npm-test.ini'
+        $runner.Environment.NPM_CONFIG_GLOBALCONFIG = Join-Path $root 'npm-global.ini'
+    }
     $app = Start-TestApp -Runner $runner
     $selection = Wait-Until { Get-AppDialog $app 'IDC_SCAN_DUPLICATES' } 'Initial target selection is cancelled without scanning any disk'
     Close-AppDialog $selection
@@ -402,6 +415,17 @@ function Test-CleanupPreview {
     $files = Get-DialogControl $dialog 'IDC_CP_FILES'
     $categories = Get-DialogControl $dialog 'IDC_CP_CATEGORIES'
     Resize-CleanupByPointer $dialog
+    if ($Case.ContainsKey('NpmTools')) {
+        $minimum = [TestDesktop]::MinimumTrackSize($dialog)
+        [TestDesktop]::Position($dialog, $rectangle[0], $rectangle[1], $minimum[0], $rectangle[3] - $rectangle[1])
+        $pipBounds = [TestDesktop]::Rectangle((Get-DialogControl $dialog 'IDC_CP_PIP'))
+        $npmControl = Get-DialogControl $dialog 'IDC_CP_NPM'
+        $npmBounds = [TestDesktop]::Rectangle($npmControl)
+        $narrowBounds = [TestDesktop]::Rectangle($dialog)
+        Assert-True ([TestDesktop]::IsWindowVisible($npmControl) -and $npmBounds[0] -gt $pipBounds[2] -and $npmBounds[2] -lt $narrowBounds[2]) 'Npm entry stays visible without overlap at the permitted minimum width'
+        Assert-True ($npmBounds[2] - $npmBounds[0] -ge $pipBounds[2] - $pipBounds[0]) 'Npm entry retains at least the neighboring cache entry width'
+        [TestDesktop]::Position($dialog, $rectangle[0], $rectangle[1], $rectangle[2] - $rectangle[0], $rectangle[3] - $rectangle[1])
+    }
     $initialFiles = [TestDesktop]::Rectangle($files)
     $width = $rectangle[2] - $rectangle[0]
     $height = $rectangle[3] - $rectangle[1]
@@ -559,12 +583,12 @@ function Test-CleanupPreview {
         'Full candidate path is available outside clipped columns' | Out-Null
     Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root 'cleanup-preview.png')
 
-    if ($Case.ContainsKey('WindowsTools') -or $Case.ContainsKey('NuGetTools') -or $Case.ContainsKey('PipTools')) {
+    if ($Case.ContainsKey('WindowsTools') -or $Case.ContainsKey('NuGetTools') -or $Case.ContainsKey('PipTools') -or $Case.ContainsKey('NpmTools')) {
         if ($Case.ContainsKey('WindowsTools') -and $Case.Language -eq 9) { Test-CleanupWindowsLaunch $app $dialog }
         Assert-Sequence @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash | ForEach-Object Hash) `
             @($before.Hash) 'Windows launch and cancellation leave every synthetic payload unchanged'
-        if ($Case.ContainsKey('NuGetTools') -or $Case.ContainsKey('PipTools')) {
-            Test-NuGetHttpFlow $app $dialog $root $Context -Pip:($Case.ContainsKey('PipTools'))
+        if ($Case.ContainsKey('NuGetTools') -or $Case.ContainsKey('PipTools') -or $Case.ContainsKey('NpmTools')) {
+            Test-NuGetHttpFlow $app $dialog $root $Context -Pip:($Case.ContainsKey('PipTools')) -Npm:($Case.ContainsKey('NpmTools'))
             Assert-Sequence @($before.Path | Get-FileHash | ForEach-Object Hash) @($before.Hash) `
                 'Official HTTP cleanup leaves all original preview and user-data sentinels unchanged'
         }
@@ -818,3 +842,7 @@ Register-Scenario cleanup.pip CleanupPreview 'Selected Python official pip purge
     Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 9; FontSize = 100; PipTools = $true }
 Register-Scenario cleanup.pip.zh CleanupPreview 'Chinese selected Python pip cache scope and confirmation' `
     Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 30724; FontSize = 200; PipTools = $true }
+Register-Scenario cleanup.npm CleanupPreview 'Selected Node official npm clean, exclusions, cancel and failure on synthetic cache' `
+    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 9; FontSize = 100; NpmTools = $true }
+Register-Scenario cleanup.npm.zh CleanupPreview 'Chinese npm clean target, confirmation and preserved npx/logs' `
+    Test-CleanupPreview -Tags Desktop -Requires Windows,Ntfs,Desktop -Data @{ Language = 30724; FontSize = 200; NpmTools = $true }

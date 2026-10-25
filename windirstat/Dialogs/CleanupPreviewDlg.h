@@ -5,6 +5,7 @@
 #include "pch.h"
 #include "Layout.h"
 #include "Cleanup/CleanupPreview.h"
+#include "Cleanup/NuGetHttpCache.h"
 
 class CCleanupPreviewDlg final : public MessageTarget<CCleanupPreviewDlg, CLayoutDialog>
 {
@@ -23,7 +24,9 @@ private:
     void OnWindowsDiskCleanup();
     void OnNuGetHttp();
     void OnPipCache();
-    void OpenOfficialCache(std::wstring python = {});
+    void OnNpmCache();
+    void SelectOfficialEnvironment(Cleanup::NuGetHttp::Provider provider);
+    void OpenOfficialCache(std::wstring tool = {}, Cleanup::NuGetHttp::Provider provider = Cleanup::NuGetHttp::Provider::NuGetHttp);
     void OpenWindowsCleanup(bool recommendations);
     void OnStop();
     void OnSelectAll();
@@ -106,6 +109,7 @@ inline std::span<const RouteEntry> CCleanupPreviewDlg::Routes()
         Route::Control<&OnWindowsDiskCleanup>(BN_CLICKED, IDC_CP_WINDOWS_DISK),
         Route::Control<&OnNuGetHttp>(BN_CLICKED, IDC_CP_NUGET),
         Route::Control<&OnPipCache>(BN_CLICKED, IDC_CP_PIP),
+        Route::Control<&OnNpmCache>(BN_CLICKED, IDC_CP_NPM),
         Route::Control<&OnStop>(BN_CLICKED, IDC_CP_CANCEL),
         Route::Control<&OnSelectAll>(BN_CLICKED, IDC_CP_SELECT_ALL),
         Route::Control<&OnSelectNone>(BN_CLICKED, IDC_CP_SELECT_NONE),

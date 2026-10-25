@@ -380,14 +380,14 @@ namespace Cleanup::NuGetHttp
                     Equal(key, L"VIRTUAL_ENV") || Equal(key, L"CONDA_PREFIX")) result += key + L"=" + value + L"\n";
             return result;
         }
-        struct PipQuery
+        struct ToolQuery
         {
             bool valid = false, cancelled = false;
             std::wstring root, details, fingerprint;
         };
-        PipQuery QueryPip(const std::wstring& tool, const Environment& env, const std::wstring& cwd, const std::stop_token stop)
+        ToolQuery QueryPip(const std::wstring& tool, const Environment& env, const std::wstring& cwd, const std::stop_token stop)
         {
-            PipQuery result;
+            ToolQuery result;
             // The chosen interpreter is explicit. Isolated mode excludes CWD, PYTHONPATH and user-site packages.
             const auto identity = Run(tool, L"-I -B -X utf8 -c \"import sys,pip;print('executable: '+sys.executable);"
                 L"print('prefix: '+sys.prefix);print('base-prefix: '+sys.base_prefix);"
@@ -410,6 +410,55 @@ namespace Cleanup::NuGetHttp
             result.valid = true;
             return result;
         }
+        constexpr auto NpmArguments = L"--global --logs-max=0 --logs-dir=\\\\.\\NUL --timing=false --loglevel=error "
+            L"--no-update-notifier --ignore-scripts --no-audit --no-fund --color=false --progress=false --json=false ";
+        Environment NpmEnvironment()
+        {
+            auto env = Snapshot();
+            for (const auto* name : { L"NODE_OPTIONS", L"NODE_PATH", L"NODE_V8_COVERAGE", L"NODE_COMPILE_CACHE", L"NODE_DEBUG", L"NODE_DEBUG_NATIVE" }) env.erase(name);
+            env[L"NODE_DISABLE_COMPILE_CACHE"] = L"1";
+            return env;
+        }
+        std::wstring NpmEnvironmentFingerprint()
+        {
+            std::wstring result;
+            for (const auto& [key, value] : Snapshot())
+                if (_wcsnicmp(key.c_str(), L"NPM_", 4) == 0 || _wcsnicmp(key.c_str(), L"NODE_", 5) == 0 ||
+                    Equal(key, L"HOME") || Equal(key, L"USERPROFILE") || Equal(key, L"APPDATA") || Equal(key, L"LOCALAPPDATA") ||
+                    Equal(key, L"HOMEDRIVE") || Equal(key, L"HOMEPATH")) result += key + L"=" + value + L"\n";
+            return result;
+        }
+        ToolQuery QueryNpm(const std::wstring& tool, const std::wstring& cli, const Environment& env,
+            const std::wstring& cwd, const std::stop_token stop)
+        {
+            ToolQuery result;
+            // npm CLI queries create caches and rotate old logs, even with logs-max=0. Load only its
+            // configuration parser here; no Npm instance, cache mkdir, log manager, verify or GC runs.
+            const auto probe = Run(tool, std::wstring(L"--no-warnings -e \"") +
+                L"const p=require('node:path'),fs=require('node:fs/promises'),h=require('node:crypto');"
+                L"(async()=>{const cli=process.argv[1],r=p.dirname(p.dirname(cli)),v=require(p.join(r,'package.json')).version;"
+                L"if(!/^(10|11)\\./.test(v))throw Error();const cp=p.join(r,'node_modules','@npmcli','config'),C=require(cp),D=require(p.join(cp,'lib','definitions'));"
+                L"const device=String.fromCharCode(92,92,46,92)+'NUL';"
+                L"const a=['--global','--logs-max=0','--logs-dir='+device,'--timing=false','--loglevel=error','--no-update-notifier','--ignore-scripts','--no-audit','--no-fund','--color=false','--progress=false','--json=false'];"
+                L"const c=new C({...D,npmPath:r,argv:[process.execPath,cli,...a],warn:false});await c.load();"
+                L"if(!c.valid||[...c.data.values()].some(d=>d.loadError&&d.loadError.code!=='ENOENT'))throw Error();"
+                L"if(p.resolve(c.flat.cache).toLowerCase()!==p.resolve(c.get('cache'),'_cacache').toLowerCase())throw Error();"
+                L"if(c.get('logs-max')!==0||c.get('timing')!==false||p.resolve(c.get('logs-dir')).toLowerCase()!==p.resolve(device).toLowerCase())throw Error();"
+                L"let bad=false;try{await fs.readdir(c.get('logs-dir'));bad=true}catch(e){}if(bad)throw Error();"
+                L"console.log('executable: '+process.execPath);console.log('node: '+process.version);console.log('npm: '+v);console.log('npm-cli: '+cli);console.log('cache: '+c.get('cache'));"
+                L"console.log('fingerprint: '+h.createHash('sha256').update(JSON.stringify([...c.data].map(([k,d])=>[k,d.source,d.raw,Object.entries(d.data)]))).digest('hex'))"
+                L"})().catch(()=>{process.exitCode=1})\" \"" + cli + L"\"", env, cwd, stop);
+            result.cancelled = probe.cancelled;
+            if (!probe.started || probe.exitCode != 0 || probe.cancelled || probe.timedOut || probe.outputTruncated ||
+                !Equal(ListedPath(probe.output, L"executable"), tool) || !Equal(ListedPath(probe.output, L"npm-cli"), cli)) return result;
+            result.root = ListedPath(probe.output, L"cache");
+            const auto fingerprint = probe.output.find(L"fingerprint: ");
+            if (result.root.empty() || fingerprint == std::wstring::npos) return result;
+            result.details = probe.output.substr(0, fingerprint);
+            result.fingerprint = probe.output; // Only safe identity fields and a digest leave the child process.
+            result.valid = true;
+            return result;
+        }
     }
 
     struct Prepared
@@ -417,9 +466,10 @@ namespace Cleanup::NuGetHttp
         Provider provider = Provider::NuGetHttp;
         std::wstring tool, root, command, cwd;
         std::wstring environmentDetails, pipFingerprint, pipEnvironmentFingerprint;
+        std::wstring npmCli, npmFingerprint, npmEnvironmentFingerprint;
         Environment environment;
-        Identity toolIdentity, rootIdentity;
-        Handle toolGuard;
+        Identity toolIdentity, rootIdentity, cliIdentity;
+        Handle toolGuard, cliGuard;
         ExclusionPolicy exclusions;
     };
 
@@ -572,6 +622,90 @@ namespace Cleanup::NuGetHttp
         return result;
     }
 
+    Preview PrepareNpm(const ExclusionPolicy& exclusions, const std::wstring& absoluteNode, const std::stop_token stop)
+    {
+        Preview result;
+        result.provider = Provider::Npm;
+        auto prepared = std::make_shared<Prepared>();
+        prepared->provider = Provider::Npm;
+        prepared->environment = NpmEnvironment();
+        prepared->npmEnvironmentFingerprint = NpmEnvironmentFingerprint();
+        prepared->exclusions = exclusions;
+        if (stop.stop_requested()) { result.state = State::Cancelled; return result; }
+        result.exclusionFailure = CheckExclusions(L"", exclusions, result.excludedDirectory, result.diagnostic);
+        if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
+        std::wstring error;
+        if (!NormalizeDirectory(absoluteNode, prepared->tool, error) ||
+            !Equal(std::filesystem::path(prepared->tool).filename().wstring(), L"node.exe") || !HasSafeAncestors(prepared->tool))
+        { result.state = State::Blocked; result.diagnostic = L"Select the intended existing absolute node.exe. No PATH, npm.cmd or launcher fallback is used."; return result; }
+        result.tool = prepared->tool;
+        const auto cli = (std::filesystem::path(prepared->tool).parent_path() / L"node_modules/npm/bin/npm-cli.js").wstring();
+        if (!NormalizeDirectory(cli, prepared->npmCli, error) || !HasSafeAncestors(prepared->npmCli))
+        { result.diagnostic = L"npm-cli.js is unavailable beside the selected Node installation. Nothing will be installed or selected automatically."; return result; }
+        prepared->toolGuard.value = CreateFileW(prepared->tool.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        prepared->cliGuard.value = CreateFileW(prepared->npmCli.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        std::vector<Handle> installation;
+        if (!prepared->toolGuard || !prepared->cliGuard || !IdentityOf(prepared->toolGuard.value, prepared->toolIdentity) ||
+            !IdentityOf(prepared->cliGuard.value, prepared->cliIdentity) || !GuardAncestors(prepared->tool, installation) || !GuardAncestors(prepared->npmCli, installation))
+        { result.state = State::Blocked; result.diagnostic = L"The selected Node/npm installation cannot be safely identified or pinned."; return result; }
+        prepared->cwd = std::filesystem::path(prepared->tool).root_path().wstring();
+        std::wstring expected;
+        if (const auto fixture = prepared->environment.find(L"WDS_CLEANUP_TEST_ROOT"); fixture != prepared->environment.end())
+        {
+            std::wstring local, fixturePath;
+            if (!ResolveTestFixture(fixture->second, local, error) || !NormalizeDirectory(fixture->second, fixturePath, error))
+            { result.state = State::Blocked; result.diagnostic = L"The marked synthetic fixture is invalid. Real-cache fallback is forbidden."; return result; }
+            expected = fixturePath + L"\\NpmCache";
+            const auto cache = prepared->environment.find(L"NPM_CONFIG_CACHE");
+            std::wstring actual;
+            if (cache == prepared->environment.end() || !NormalizeDirectory(cache->second, actual, error) || !Equal(actual, expected))
+            { result.state = State::Blocked; result.diagnostic = L"The synthetic npm operation requires its explicit fixture-owned NpmCache."; return result; }
+            for (const auto* key : { L"NPM_CONFIG_USERCONFIG", L"NPM_CONFIG_GLOBALCONFIG" })
+            {
+                const auto file = prepared->environment.find(key);
+                std::wstring path;
+                if (file == prepared->environment.end() || !NormalizeDirectory(file->second, path, error) ||
+                    !IsWithin(path, fixturePath) || !HasSafeAncestors(path))
+                { result.state = State::Blocked; result.diagnostic = L"Synthetic npm configuration must be explicit safe files owned by the fixture."; return result; }
+            }
+        }
+        else
+        {
+            const auto local = Known(FOLDERID_LocalAppData);
+            if (!local.empty()) expected = local + L"\\npm-cache";
+        }
+        std::wstring normalizedExpected;
+        if (!NormalizeDirectory(expected, normalizedExpected, error))
+        { result.state = State::Blocked; result.diagnostic = L"The standard npm cache location cannot be established."; return result; }
+        const auto query = QueryNpm(prepared->tool, prepared->npmCli, prepared->environment, prepared->cwd, stop);
+        if (query.cancelled) { result.state = State::Cancelled; return result; }
+        if (!query.valid)
+        { result.diagnostic = L"The selected npm configuration cannot be read safely. This pilot supports npm 10/11 with the expected configuration parser and _cacache layout; no CLI verification or repair was run."; return result; }
+        prepared->root = query.root;
+        prepared->environmentDetails = query.details;
+        prepared->npmFingerprint = query.fingerprint;
+        prepared->command = L"\"" + prepared->tool + L"\" \"" + prepared->npmCli + L"\" " + NpmArguments + L"--cache \"" + prepared->root + L"\" cache clean --force";
+        result.cachePath = prepared->root;
+        result.command = prepared->command;
+        result.environmentDetails = prepared->environmentDetails;
+        if (!Equal(prepared->root, normalizedExpected))
+        { result.state = State::Blocked; result.diagnostic = L"Only the actual standard npm cache or a validated fixture is supported; a custom location is blocked."; return result; }
+        if (IsWithin(prepared->tool, prepared->root) || IsWithin(prepared->npmCli, prepared->root))
+        { result.state = State::Blocked; result.diagnostic = L"The npm cache overlaps its selected installation."; return result; }
+        result.exclusionFailure = CheckExclusions(prepared->root, exclusions, result.excludedDirectory, result.diagnostic);
+        if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
+        std::vector<Handle> ancestors;
+        if (!GuardAncestors(prepared->root, ancestors) || !HasSafeAncestors(prepared->root) || !Inspect(prepared->root, result.before, stop))
+        { result.state = stop.stop_requested() ? State::Cancelled : State::Blocked; result.diagnostic = L"The npm cache contains an unsafe path, reparse point, hard link, access failure or exceeds the inspection limit."; return result; }
+        Handle root(CreateFileW(prepared->root.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+        if (!root || !IdentityOf(root.value, prepared->rootIdentity))
+        { result.state = State::Blocked; result.diagnostic = L"The npm cache is missing or unavailable; no directory is created during detection."; return result; }
+        result.state = State::Ready;
+        result.prepared = std::move(prepared);
+        return result;
+    }
+
     Result Execute(const Preview& preview, const ExclusionPolicy& currentExclusions, const std::stop_token stop)
     {
         Result result;
@@ -587,8 +721,8 @@ namespace Cleanup::NuGetHttp
         if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
         std::vector<Handle> ancestors;
         Identity toolIdentity, rootIdentity;
-        // pip purges contents without deleting its root. Keep that name stable throughout its command.
-        const DWORD rootShare = FILE_SHARE_READ | FILE_SHARE_WRITE | (prepared->provider == Provider::Pip ? 0 : FILE_SHARE_DELETE);
+        // pip/npm purge contents without deleting the configured root. Keep its name stable.
+        const DWORD rootShare = FILE_SHARE_READ | FILE_SHARE_WRITE | (prepared->provider == Provider::NuGetHttp ? FILE_SHARE_DELETE : 0);
         Handle root(CreateFileW(prepared->root.c_str(), FILE_READ_ATTRIBUTES, rootShare,
             nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
         if (!IdentityOf(prepared->toolGuard.value, toolIdentity) || toolIdentity != prepared->toolIdentity || !root ||
@@ -600,12 +734,25 @@ namespace Cleanup::NuGetHttp
             if (PipEnvironmentFingerprint(PipEnvironment()) != prepared->pipEnvironmentFingerprint)
             { result.state = State::Blocked; result.diagnostic = L"The pip/Python environment changed after preview. No purge command started."; return result; }
         }
-        else
+        else if (prepared->provider == Provider::NuGetHttp)
         {
             const auto listed = Run(prepared->tool, L"nuget locals all --list --force-english-output", prepared->environment, prepared->cwd, stop);
             if (listed.cancelled) { result.state = State::Cancelled; return result; }
             if (listed.exitCode != 0 || !Equal(ListedPath(listed.output), prepared->root) || !SeparateCaches(listed.output, prepared->root))
             { result.state = State::Blocked; result.diagnostic = L"The official HTTP cache scope could not be reconfirmed."; return result; }
+        }
+        if (prepared->provider == Provider::Npm)
+        {
+            Identity currentTool, currentCli, heldCli;
+            if (!GuardAncestors(prepared->tool, ancestors) || !GuardAncestors(prepared->npmCli, ancestors) ||
+                !HasSafeAncestors(prepared->tool) || !HasSafeAncestors(prepared->npmCli))
+            { result.state = State::Blocked; result.diagnostic = L"The selected Node/npm installation path became unsafe."; return result; }
+            Handle tool(CreateFileW(prepared->tool.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr));
+            Handle cli(CreateFileW(prepared->npmCli.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+            if (!tool || !cli || !IdentityOf(tool.value, currentTool) || currentTool != prepared->toolIdentity ||
+                !IdentityOf(cli.value, currentCli) || currentCli != prepared->cliIdentity ||
+                !IdentityOf(prepared->cliGuard.value, heldCli) || heldCli != prepared->cliIdentity)
+            { result.state = State::Blocked; result.diagnostic = L"Node or npm-cli.js identity changed after scope review."; return result; }
         }
         Handle finalRoot(CreateFileW(prepared->root.c_str(), FILE_READ_ATTRIBUTES, rootShare,
             nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
@@ -625,10 +772,19 @@ namespace Cleanup::NuGetHttp
                 PipEnvironmentFingerprint(PipEnvironment()) != prepared->pipEnvironmentFingerprint)
             { result.state = State::Blocked; result.diagnostic = L"The selected Python, pip configuration or cache scope changed or cannot be reconfirmed. No purge command started."; return result; }
         }
+        if (prepared->provider == Provider::Npm)
+        {
+            const auto query = QueryNpm(prepared->tool, prepared->npmCli, prepared->environment, prepared->cwd, stop);
+            if (query.cancelled) { result.state = State::Cancelled; return result; }
+            if (!query.valid || !Equal(query.root, prepared->root) || query.fingerprint != prepared->npmFingerprint ||
+                NpmEnvironmentFingerprint() != prepared->npmEnvironmentFingerprint)
+            { result.state = State::Blocked; result.diagnostic = L"The npm/Node environment, configuration or actual cache changed or cannot be reconfirmed. No clean command started."; return result; }
+        }
         result.exclusionFailure = CheckExclusions(prepared->root, currentExclusions, result.excludedDirectory, result.diagnostic);
         if (result.exclusionFailure != ExclusionFailure::None) { result.state = State::Blocked; return result; }
         // Official path-based deletion is not atomic. Cancellation may leave partial completion.
-        const auto arguments = prepared->provider == Provider::Pip ? std::wstring(PipArguments) + L"--cache-dir \"" + prepared->root + L"\" cache purge" : L"nuget locals http-cache --clear --force-english-output";
+        const auto arguments = prepared->provider == Provider::Pip ? std::wstring(PipArguments) + L"--cache-dir \"" + prepared->root + L"\" cache purge" :
+            prepared->provider == Provider::Npm ? L"\"" + prepared->npmCli + L"\" " + NpmArguments + L"--cache \"" + prepared->root + L"\" cache clean --force" : L"nuget locals http-cache --clear --force-english-output";
         const auto run = Run(prepared->tool, arguments, prepared->environment, prepared->cwd, stop);
         result.started = run.started;
         result.exitCode = run.exitCode;

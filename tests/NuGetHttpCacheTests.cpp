@@ -162,6 +162,96 @@ static void TestPip(const fs::path& run, const std::wstring& python, const std::
         Check(p.state == State::Blocked && !Execute(p, none).started, "A pip cache junction fails closed"); f.Preserved();
     }
 }
+static void TestNpm(const fs::path& run, const std::wstring& node)
+{
+    const ExclusionPolicy none{ true, L"" };
+    const auto setup = [](const Fixture& f)
+    {
+        const auto cache = f.root / L"NpmCache";
+        const auto user = f.root / L"npm-test.ini", global = f.root / L"npm-global.ini";
+        Write(user, "fetch-timeout=12345\n//registry.npmjs.org/:_authToken=synthetic-npm-secret\n"); Write(global, "");
+        SetEnvironmentVariableW(L"NPM_CONFIG_CACHE", cache.c_str());
+        SetEnvironmentVariableW(L"NPM_CONFIG_USERCONFIG", user.c_str());
+        SetEnvironmentVariableW(L"NPM_CONFIG_GLOBALCONFIG", global.c_str());
+        SetEnvironmentVariableW(L"NODE_OPTIONS", nullptr); SetEnvironmentVariableW(L"NODE_PATH", nullptr);
+        Write(cache / L"_cacache/content-v2/sha512/aa/data", std::string(12345, 'a'));
+        Write(cache / L"_cacache/index-v5/bb/entry", std::string(6789, 'b'));
+        Write(cache / L"_npx/sentinel", "keep");
+        Write(cache / L"_logs/2026-01-01T00_00_00_000Z-debug-0.log", "keep");
+        Write(cache / L"unmanaged-sentinel", "keep");
+        Write(f.root / L"PipCache/sentinel");
+        return cache;
+    };
+    const auto retained = [](const Fixture& f, const fs::path& cache)
+    {
+        Check(Read(cache / L"_npx/sentinel") == "keep" && Read(cache / L"_logs/2026-01-01T00_00_00_000Z-debug-0.log") == "keep" &&
+            Read(cache / L"unmanaged-sentinel") == "keep", "npm clean preserves npx, old logs and unmanaged root files");
+        Check(Read(f.http / L"source/a.dat") == std::string(12345, 'a') && Read(f.root / L"PipCache/sentinel") == "synthetic sentinel",
+            "NuGet and pip caches survive npm cleanup"); f.Preserved();
+    };
+    {
+        Fixture f(run, L"npm-success"); const auto cache = setup(f);
+        SetEnvironmentVariableW(L"NODE_OPTIONS", L"--wds-unrecognized-injected-option");
+        SetEnvironmentVariableW(L"NODE_PATH", (f.root / L"project").c_str());
+        auto p = PrepareNpm(none, node);
+        if (p.state != State::Ready) std::wcerr << p.diagnostic << L"\n";
+        Check(p.state == State::Ready && p.provider == Provider::Npm && fs::equivalent(p.cachePath, cache), "Selected Node/npm reports its isolated actual cache");
+        Check(p.command.find(L"cache clean --force") != std::wstring::npos && p.command.find(L"--logs-dir=\\\\.\\NUL") != std::wstring::npos &&
+            p.environmentDetails.find(L"npm-cli: ") != std::wstring::npos, "npm scope pins its CLI, cache and disabled log destination");
+        Check((p.environmentDetails + p.diagnostic + p.command).find(L"synthetic-npm-secret") == std::wstring::npos,
+            "npm configuration credentials never appear in the displayed scope");
+        std::stop_source cancelled; cancelled.request_stop();
+        auto r = Execute(p, none, cancelled.get_token());
+        Check(r.state == State::Cancelled && !r.started && fs::exists(cache / L"_cacache/index-v5/bb/entry"), "Cancelled npm request starts no clean command");
+        auto forged = p; forged.provider = Provider::Pip;
+        Check(!Execute(forged, none).started, "npm provider identity cannot be forged after review");
+        Check(!Execute(p, { true, (cache / L"_cacache").wstring() }).started, "An excluded npm content-cache subtree blocks full cleanup");
+        r = Execute(p, none);
+        if (r.state != State::Success) std::wcerr << r.diagnostic << L"\n" << r.output << L"\n";
+        Check(r.state == State::Success && r.started && r.exitCode == 0 && !fs::exists(cache / L"_cacache"), "Official npm full clean removes only synthetic content-cache");
+        Check(r.before.logicalBytes && *r.before.logicalBytes == 19146 && r.after.logicalBytes && *r.after.logicalBytes == 12,
+            "npm root-byte observations retain untouched logs, npx and unmanaged bytes"); retained(f, cache);
+        std::cout << "{\"case\":\"npm_success_cancel\",\"before\":19146,\"after\":12,\"exit\":0}\n";
+    }
+    {
+        Fixture f(run, L"npm-locked"); const auto cache = setup(f); auto p = PrepareNpm(none, node);
+        Check(p.state == State::Ready, "Locked npm scope prepared");
+        auto h = CreateFileW((cache / L"_cacache/index-v5/bb/entry").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        Check(h != INVALID_HANDLE_VALUE, "Own npm content locked without delete sharing");
+        auto r = Execute(p, none); CloseHandle(h);
+        Check(r.state == State::Failed && r.started && r.exitCode != 0 && Read(cache / L"_cacache/index-v5/bb/entry") == std::string(6789, 'b'),
+            "npm occupied-file failure never falls back to another operation"); retained(f, cache);
+    }
+    {
+        Fixture f(run, L"npm-guards"); const auto cache = setup(f);
+        auto blocked = PrepareNpm({ true, cache.wstring() }, node);
+        Check(blocked.state == State::Blocked && blocked.exclusionFailure == ExclusionFailure::Overlap && !blocked.prepared, "npm preparation enforces exclusion conflicts");
+        Check(PrepareNpm({}, node).state == State::Blocked, "Unavailable npm exclusions fail closed");
+        auto p = PrepareNpm(none, node); Check(p.state == State::Ready, "npm scope prepared for configuration changes");
+        SetEnvironmentVariableW(L"NODE_OPTIONS", L"--wds-new-injected-option");
+        Check(!Execute(p, none).started, "Changing even disabled Node injection settings blocks execution");
+        SetEnvironmentVariableW(L"NODE_OPTIONS", nullptr);
+        SetEnvironmentVariableW(L"NPM_CONFIG_CACHE", (f.root / L"project").c_str());
+        Check(!Execute(p, none).started, "Changing npm cache environment blocks execution");
+        SetEnvironmentVariableW(L"NPM_CONFIG_CACHE", cache.c_str());
+        Write(f.root / L"npm-test.ini", "fetch-timeout=12346\n//registry.npmjs.org/:_authToken=synthetic-npm-secret\n");
+        Check(!Execute(p, none).started && fs::exists(cache / L"_cacache/index-v5/bb/entry"), "An npm config file change blocks cleanup even if the cache location is unchanged");
+        p = PrepareNpm(none, node); Check(p.state == State::Ready, "Updated npm configuration can be reviewed afresh");
+        fs::rename(cache, f.root / L"retained-npm"); Write(cache / L"replacement", "replacement");
+        Check(!Execute(p, none).started && Read(cache / L"replacement") == "replacement", "Replaced npm cache root identity blocks clean");
+        Check(!Execute(PrepareNpm(none, (f.root / L"missing/node.exe").wstring()), none).started, "An unavailable Node path never falls back to PATH");
+        Write(f.root / L"node.exe", "synthetic non-executable");
+        auto missing = PrepareNpm(none, (f.root / L"node.exe").wstring());
+        Check(missing.state == State::Unavailable && !missing.prepared && !Execute(missing, none).started, "A selected Node layout without npm cannot use another installation");
+        f.Preserved();
+    }
+    {
+        Fixture f(run, L"npm-junction"); const auto cache = setup(f);
+        Junction(cache / L"_cacache/redirect", f.root / L"project");
+        auto p = PrepareNpm(none, node);
+        Check(p.state == State::Blocked && !Execute(p, none).started, "An npm content cache reparse point blocks the official command"); retained(f, cache);
+    }
+}
 int wmain(int argc, wchar_t** argv)
 {
     try
@@ -275,8 +365,9 @@ int wmain(int argc, wchar_t** argv)
                 "Non-overlapping exclusions still allow normal confirmed official cleanup");
             f.Preserved();
         }
-        if (argc == 3) TestPip(run, argv[1], argv[2]);
-        else Check(argc == 1, "Pip tests require explicit normal and no-pip interpreter paths");
+        if (argc == 3 || argc == 4) TestPip(run, argv[1], argv[2]);
+        else Check(argc == 1, "Cache tests require explicit interpreter paths");
+        if (argc == 4) TestNpm(run, argv[3]);
         std::cout << "{\"status\":\"PASS\",\"checks\":" << checks << ",\"fixtures_retained\":true}\n";
         return 0;
     }

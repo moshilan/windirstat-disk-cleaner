@@ -6,6 +6,11 @@
 
 namespace
 {
+    std::wstring_view ProviderString(const Cleanup::NuGetHttp::Provider provider, const std::wstring_view nuget,
+        const std::wstring_view pip, const std::wstring_view npm)
+    {
+        return provider == Cleanup::NuGetHttp::Provider::Npm ? npm : (provider == Cleanup::NuGetHttp::Provider::Pip ? pip : nuget);
+    }
     std::wstring Bytes(const std::optional<std::uint64_t>& value)
     {
         return value ? std::to_wstring(*value) + L" B" : Localization::Lookup(IDS_NH_UNKNOWN);
@@ -28,12 +33,12 @@ namespace
         default: return Localization::Lookup(IDS_NH_UNAVAILABLE);
         }
     }
-    std::wstring ExclusionMessage(const Cleanup::NuGetHttp::ExclusionFailure failure, const std::wstring& directory, const bool pip)
+    std::wstring ExclusionMessage(const Cleanup::NuGetHttp::ExclusionFailure failure, const std::wstring& directory, const Cleanup::NuGetHttp::Provider provider)
     {
         using enum Cleanup::NuGetHttp::ExclusionFailure;
         switch (failure)
         {
-        case Overlap: return Localization::Format(pip ? IDS_PH_EXCLUDED : IDS_NH_EXCLUDED, directory);
+        case Overlap: return Localization::Format(ProviderString(provider, IDS_NH_EXCLUDED, IDS_PH_EXCLUDED, IDS_NP_EXCLUDED), directory);
         case Unavailable: return Localization::Lookup(IDS_NH_EXCLUSIONS_UNAVAILABLE);
         case Changed: return Localization::Lookup(IDS_NH_EXCLUSIONS_CHANGED);
         default: return {};
@@ -42,8 +47,8 @@ namespace
 }
 
 CNuGetHttpCacheDlg::CNuGetHttpCacheDlg(WindowRef parent, std::function<Cleanup::NuGetHttp::ExclusionPolicy()> readExclusions,
-    std::wstring python)
-    : MessageTarget(IDD_NUGET_HTTP, nullptr, parent), m_readExclusions(std::move(readExclusions)), m_python(std::move(python)) {}
+    std::wstring tool, const Cleanup::NuGetHttp::Provider provider)
+    : MessageTarget(IDD_NUGET_HTTP, nullptr, parent), m_readExclusions(std::move(readExclusions)), m_tool(std::move(tool)), m_provider(provider) {}
 CNuGetHttpCacheDlg::~CNuGetHttpCacheDlg()
 {
     if (m_worker.joinable()) { m_worker.request_stop(); m_worker.join(); }
@@ -52,11 +57,11 @@ bool CNuGetHttpCacheDlg::OnInitDialog()
 {
     CLayoutDialog::OnInitDialog();
     Localization::UpdateDialogs(*this);
-    if (!m_python.empty())
+    if (m_provider != Cleanup::NuGetHttp::Provider::NuGetHttp)
     {
-        ::SetWindowTextW(Handle(), Localization::Lookup(IDS_PH_TITLE).c_str());
-        SetText(IDC_NH_NOTICE, Localization::Lookup(IDS_PH_NOTICE));
-        SetText(IDC_NH_CLEAR, Localization::Lookup(IDS_PH_CLEAR));
+        ::SetWindowTextW(Handle(), Localization::Lookup(ProviderString(m_provider, IDS_NH_TITLE, IDS_PH_TITLE, IDS_NP_TITLE)).c_str());
+        SetText(IDC_NH_NOTICE, Localization::Lookup(ProviderString(m_provider, IDS_NH_NOTICE, IDS_PH_NOTICE, IDS_NP_NOTICE)));
+        SetText(IDC_NH_CLEAR, Localization::Lookup(ProviderString(m_provider, IDS_NH_CLEAR, IDS_PH_CLEAR, IDS_NP_CLEAR)));
     }
     DarkMode::AdjustControls(*this);
     SetTimer(1, 100);
@@ -74,15 +79,16 @@ void CNuGetHttpCacheDlg::Start(const bool execute)
     m_error = false;
     GetDlgItem(IDC_NH_CLEAR).EnableWindow(false);
     GetDlgItem(IDC_NH_STOP).EnableWindow(true);
-    SetText(IDC_NH_STATUS, Localization::Lookup(execute ? (m_python.empty() ? IDS_NH_RUNNING : IDS_PH_RUNNING) :
-        (m_python.empty() ? IDS_NH_DETECTING : IDS_PH_DETECTING)));
+    SetText(IDC_NH_STATUS, Localization::Lookup(execute ? ProviderString(m_provider, IDS_NH_RUNNING, IDS_PH_RUNNING, IDS_NP_RUNNING) :
+        ProviderString(m_provider, IDS_NH_DETECTING, IDS_PH_DETECTING, IDS_NP_DETECTING)));
     m_worker = std::jthread([this, execute, exclusions](std::stop_token stop)
     {
         try
         {
             if (execute) m_result = Cleanup::NuGetHttp::Execute(m_preview, exclusions, stop);
-            else m_preview = m_python.empty() ? Cleanup::NuGetHttp::Prepare(exclusions, stop) :
-                Cleanup::NuGetHttp::PreparePip(exclusions, m_python, stop);
+            else if (m_provider == Cleanup::NuGetHttp::Provider::Npm) m_preview = Cleanup::NuGetHttp::PrepareNpm(exclusions, m_tool, stop);
+            else if (m_provider == Cleanup::NuGetHttp::Provider::Pip) m_preview = Cleanup::NuGetHttp::PreparePip(exclusions, m_tool, stop);
+            else m_preview = Cleanup::NuGetHttp::Prepare(exclusions, stop);
         }
         catch (...) { m_error = true; }
         m_finished.store(true);
@@ -92,8 +98,8 @@ void CNuGetHttpCacheDlg::OnClear()
 {
     if (m_busy || m_executing || m_preview.state != Cleanup::NuGetHttp::State::Ready || !m_preview.prepared) return;
     // The confirmation names the immutable official scope, never selected candidate rows.
-    if (::MessageBoxW(Handle(), Localization::Format(m_python.empty() ? IDS_NH_CONFIRM : IDS_PH_CONFIRM, m_preview.cachePath, m_preview.command).c_str(),
-        Localization::Lookup(m_python.empty() ? IDS_NH_TITLE : IDS_PH_TITLE).c_str(), MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK)
+    if (::MessageBoxW(Handle(), Localization::Format(ProviderString(m_provider, IDS_NH_CONFIRM, IDS_PH_CONFIRM, IDS_NP_CONFIRM), m_preview.cachePath, m_preview.command).c_str(),
+        Localization::Lookup(ProviderString(m_provider, IDS_NH_TITLE, IDS_PH_TITLE, IDS_NP_TITLE)).c_str(), MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK)
     {
         SetText(IDC_NH_STATUS, Localization::Lookup(IDS_NH_NOT_STARTED));
         return;
@@ -132,9 +138,9 @@ void CNuGetHttpCacheDlg::Refresh()
         SetText(IDC_NH_STATUS, Localization::Lookup(IDS_NH_FAILED));
         return;
     }
-    std::wstring details = Localization::Format(m_python.empty() ? IDS_NH_SCOPE : IDS_PH_SCOPE, m_preview.tool, m_preview.cachePath, m_preview.command,
+    std::wstring details = Localization::Format(ProviderString(m_provider, IDS_NH_SCOPE, IDS_PH_SCOPE, IDS_NP_SCOPE), m_preview.tool, m_preview.cachePath, m_preview.command,
         Bytes(m_preview.before.logicalBytes));
-    if (!m_python.empty()) details = m_preview.environmentDetails + L"\r\n\r\n" + details;
+    if (m_provider != Cleanup::NuGetHttp::Provider::NuGetHttp) details = m_preview.environmentDetails + L"\r\n\r\n" + details;
     if (m_executing)
     {
         const auto scope = details;
@@ -143,14 +149,14 @@ void CNuGetHttpCacheDlg::Refresh()
             Change(m_result.before.logicalBytes, m_result.after.logicalBytes),
             Change(m_result.before.availableBytes, m_result.after.availableBytes));
         details += L"\r\n" + m_result.diagnostic + L"\r\n" + m_result.output + L"\r\n\r\n" + scope;
-        const auto protection = ExclusionMessage(m_result.exclusionFailure, m_result.excludedDirectory, !m_python.empty());
+        const auto protection = ExclusionMessage(m_result.exclusionFailure, m_result.excludedDirectory, m_provider);
         details = protection + (protection.empty() ? L"" : L"\r\n\r\n") + details;
         SetText(IDC_NH_STATUS, protection.empty() ? StateName(m_result.state) : protection);
     }
     else
     {
         details += L"\r\n\r\n" + m_preview.diagnostic;
-        const auto protection = ExclusionMessage(m_preview.exclusionFailure, m_preview.excludedDirectory, !m_python.empty());
+        const auto protection = ExclusionMessage(m_preview.exclusionFailure, m_preview.excludedDirectory, m_provider);
         details = protection + (protection.empty() ? L"" : L"\r\n\r\n") + details;
         SetText(IDC_NH_STATUS, protection.empty() ? StateName(m_preview.state) : protection);
     }

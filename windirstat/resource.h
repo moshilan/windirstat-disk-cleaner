@@ -475,6 +475,7 @@
 #define IDC_NH_CLEAR                    1235
 #define IDC_NH_STOP                     1236
 #define IDC_CP_PIP                      1237
+#define IDC_CP_NPM                      1238
 
 // Next default values for new objects
 //
@@ -482,7 +483,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        127
 #define _APS_NEXT_COMMAND_VALUE         32971
-#define _APS_NEXT_CONTROL_VALUE         1238
+#define _APS_NEXT_CONTROL_VALUE         1239
 #define _APS_NEXT_SYMED_VALUE           127
 #endif
 #endif

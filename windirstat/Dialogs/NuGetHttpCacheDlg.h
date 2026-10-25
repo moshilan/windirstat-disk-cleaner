@@ -10,7 +10,7 @@ class CNuGetHttpCacheDlg final : public MessageTarget<CNuGetHttpCacheDlg, CLayou
 {
 public:
     CNuGetHttpCacheDlg(WindowRef parent, std::function<Cleanup::NuGetHttp::ExclusionPolicy()> readExclusions,
-        std::wstring python = {});
+        std::wstring tool = {}, Cleanup::NuGetHttp::Provider provider = Cleanup::NuGetHttp::Provider::NuGetHttp);
     ~CNuGetHttpCacheDlg() override;
     bool Started() const { return m_started; }
     static std::span<const RouteEntry> Routes();
@@ -27,7 +27,8 @@ private:
     Cleanup::NuGetHttp::Preview m_preview;
     Cleanup::NuGetHttp::Result m_result;
     std::function<Cleanup::NuGetHttp::ExclusionPolicy()> m_readExclusions;
-    std::wstring m_python;
+    std::wstring m_tool;
+    Cleanup::NuGetHttp::Provider m_provider;
     std::jthread m_worker;
     std::atomic_bool m_finished = false;
     bool m_busy = false, m_executing = false, m_started = false, m_error = false, m_closePending = false;

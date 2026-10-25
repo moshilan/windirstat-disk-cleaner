@@ -1,14 +1,19 @@
 function Test-NuGetHttpFlow {
-    param($App, [IntPtr] $Preview, [string] $Root, $Context, [switch] $Pip)
-    $http = Join-Path $Root $(if ($Pip) { 'PipCache' } else { 'NuGetHttp' })
-    $entry = if ($Pip) { 'IDC_CP_PIP' } else { 'IDC_CP_NUGET' }
-    $command = if ($Pip) { 'cache purge' } else { 'http-cache --clear' }
-    $imagePrefix = if ($Pip) { 'pip-cache' } else { 'nuget-http' }
-    $a = New-TestFile (Join-Path $http $(if ($Pip) { 'http-v2\recent.body' } else { 'source\recent.dat' })) 12345
-    $b = New-TestFile (Join-Path $http $(if ($Pip) { 'wheels\hash\synthetic-1-py3-none-any.whl' } else { 'source\unchecked.dat' })) 6789
+    param($App, [IntPtr] $Preview, [string] $Root, $Context, [switch] $Pip, [switch] $Npm)
+    $http = Join-Path $Root $(if ($Npm) { 'NpmCache' } elseif ($Pip) { 'PipCache' } else { 'NuGetHttp' })
+    $entry = if ($Npm) { 'IDC_CP_NPM' } elseif ($Pip) { 'IDC_CP_PIP' } else { 'IDC_CP_NUGET' }
+    $command = if ($Npm) { 'cache clean --force' } elseif ($Pip) { 'cache purge' } else { 'http-cache --clear' }
+    $imagePrefix = if ($Npm) { 'npm-cache' } elseif ($Pip) { 'pip-cache' } else { 'nuget-http' }
+    $a = New-TestFile (Join-Path $http $(if ($Npm) { '_cacache\content-v2\recent' } elseif ($Pip) { 'http-v2\recent.body' } else { 'source\recent.dat' })) 12345
+    $b = New-TestFile (Join-Path $http $(if ($Npm) { '_cacache\index-v5\unchecked' } elseif ($Pip) { 'wheels\hash\synthetic-1-py3-none-any.whl' } else { 'source\unchecked.dat' })) 6789
     $sentinels = @('packages','scratch','plugins','project' | ForEach-Object {
         New-TestFile (Join-Path $Root "$_\nuget-sentinel") 4097
     })
+    if ($Npm) {
+        $sentinels += @('_npx\preserved', '_logs\2026-01-01T00_00_00_000Z-debug-0.log', 'unmanaged' | ForEach-Object {
+            New-TestFile (Join-Path $http $_) 4
+        })
+    }
     $hashes = @($sentinels | Get-FileHash | ForEach-Object Hash)
     $httpHashes = @($a,$b | Get-FileHash | ForEach-Object Hash)
     foreach ($rule in @($http, (Join-Path $http 'source'), 'relative-directory')) {
@@ -44,6 +49,10 @@ function Test-NuGetHttpFlow {
         $statusControl = Get-DialogControl $dialog 'IDC_NH_STATUS'
         Assert-True ([TestDesktop]::IsWindowEnabled($clear)) ('Installed SDK and isolated scope are usable: ' + $details)
         Assert-True ($details.IndexOf($http, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and $details.Contains($command)) 'Actual official scope and fixed command are displayed'
+        if ($Npm) {
+            Assert-True ($details.Contains('_cacache') -and $details.Contains('_npx') -and $details.Contains('verify')) 'Npm clean target and retained directories are distinct from verification'
+            Assert-True ($details.Contains('npm-cli.js') -and $details.IndexOf($env:WDS_TEST_NODE, [StringComparison]::OrdinalIgnoreCase) -ge 0) 'Npm scope identifies the selected runtime and actual CLI'
+        }
         $notice = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_NH_NOTICE'))
         Assert-True ($notice -match 'ENTIRE|整个|全量') 'The entire HTTP cache scope is explicit'
         Assert-True ($notice -match 'unchecked|未勾选') 'Official cleanup is independent of preview selection'
@@ -79,7 +88,11 @@ function Test-NuGetHttpFlow {
             if ($attempt -eq 'success') {
                 Assert-True ($status -match 'command succeeded|命令执行成功') 'Command success is presented separately from space claims'
                 Assert-True (-not (Test-Path -LiteralPath $a) -and -not (Test-Path -LiteralPath $b)) 'Confirmed official operation clears both recent and unchecked synthetic files'
-                Assert-True ($result -match '19134' -and $result -match 'after: 0 B|清理后缓存字节：0 B') 'Measured cache bytes show actual contents before and after'
+                if ($Npm) {
+                    Assert-True ($result -match '19146' -and $result -match 'after: 12 B|清理后缓存字节：12 B') 'Npm measurements retain npx, logs and unrelated files instead of assuming an empty cache root'
+                } else {
+                    Assert-True ($result -match '19134' -and $result -match 'after: 0 B|清理后缓存字节：0 B') 'Measured cache bytes show actual contents before and after'
+                }
                 Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root ($imagePrefix + '-result.png'))
             } else {
                 Assert-True ($status -match 'failed|失败') 'Locked-file official failure is visible'
@@ -92,8 +105,8 @@ function Test-NuGetHttpFlow {
         Wait-Until { [TestDesktop]::IsWindowEnabled($Preview) } 'The official result returns to the preview' | Out-Null
         Assert-Equal ([NativeListViewHelper]::GetItemCount((Get-DialogControl $Preview 'IDC_CP_FILES'))) 0 'An executed official operation invalidates stale candidate rows'
         if ($attempt -eq 'success') {
-            $a = New-TestFile (Join-Path $http $(if ($Pip) { 'http-v2\locked.body' } else { 'source\locked.dat' })) 12345
-            New-TestFile (Join-Path $http $(if ($Pip) { 'wheels\hash\free-1-py3-none-any.whl' } else { 'source\free.dat' })) 6789 | Out-Null
+            $a = New-TestFile (Join-Path $http $(if ($Npm) { '_cacache\content-v2\locked' } elseif ($Pip) { 'http-v2\locked.body' } else { 'source\locked.dat' })) 12345
+            New-TestFile (Join-Path $http $(if ($Npm) { '_cacache\index-v5\free' } elseif ($Pip) { 'wheels\hash\free-1-py3-none-any.whl' } else { 'source\free.dat' })) 6789 | Out-Null
         }
     }
     Set-CleanupExclusions $Preview ''
