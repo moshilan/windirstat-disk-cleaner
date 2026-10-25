@@ -581,7 +581,7 @@ function Test-SelectedDeletion {
     $before = Get-DiskSnapshot $root
     $hashes = @($before | Where-Object { -not $_.Directory -and
         -not $_.Path.StartsWith((Get-NormalPath $removed) + '\') -and $_.Path -ne (Get-NormalPath $single) } |
-        ForEach-Object Path | Get-FileHash | Sort-Object Path)
+        ForEach-Object { Get-FileHash -LiteralPath $_.Path } | Sort-Object Path)
     $app = Start-TestApp @($root) -Settings @{ Options = @{ ShowMicrosoftProgress = $Case.Microsoft } }
     $list = Get-AppList $app -AllFiles
     Expand-AppDirectory $app $list 'beta' 'untouched.txt'
@@ -597,12 +597,12 @@ function Test-SelectedDeletion {
     Assert-Equal ([TestDesktop]::Message($boundary, 0x0400).ToInt32() -band 0xFFFF) 2 'Traditional deletion boundary defaults to Cancel even when the old warning is disabled'
     Close-AppDialog $boundary 2
     Wait-AppIdle $app
-    Assert-Sequence @($allPaths.Path | Get-FileHash | ForEach-Object Hash) @($allPaths.Hash) 'Cancelling the boundary performs no deletion'
+    Assert-Sequence @($allPaths | ForEach-Object { Get-FileHash -LiteralPath $_.Path } | ForEach-Object Hash) @($allPaths.Hash) 'Cancelling the boundary performs no deletion'
     Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
     Wait-AppIdle $app
     Assert-True (-not [IO.Directory]::Exists($removed) -and -not [IO.File]::Exists($single)) `
         'Permanent deletion removes the selected folder, new descendants, and separately selected file'
-    $after = @($hashes.Path | Get-FileHash | Sort-Object Path)
+    $after = @($hashes.Path | ForEach-Object { Get-FileHash -LiteralPath $_ } | Sort-Object Path)
     Assert-Sequence @($after.Hash) @($hashes.Hash) 'Permanent deletion preserves every unselected payload'
     Assert-ScanSnapshot (Save-AppReport $app 'deleted-local') (Get-DiskSnapshot $root) $root -Physical
 }
