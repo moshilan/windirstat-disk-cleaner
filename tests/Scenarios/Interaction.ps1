@@ -470,7 +470,7 @@ function Test-DeduplicateGroups {
     Assert-True (-not (Get-AppCommandState $app 'ID_CLEANUP_CREATE_HARDLINK').Enabled) `
         'A single duplicate cannot trigger hardlink replacement'
     Select-AppRows $app $list $paths
-    Invoke-AppCommand $app 'ID_CLEANUP_CREATE_HARDLINK'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_CREATE_HARDLINK'
     Wait-AppIdle $app
     $identities = @($paths | ForEach-Object { Get-FileIdentity $_ })
     Assert-Equal $identities[0].Id $identities[1].Id 'The first hash group shares a physical file after deduplication'
@@ -587,7 +587,18 @@ function Test-SelectedDeletion {
     Expand-AppDirectory $app $list 'beta' 'untouched.txt'
     Select-AppRows $app $list @('alpha', 'untouched.txt')
     New-TestFile (Join-Path $removed 'created-after-scan.txt') 353 | Out-Null
+    $allPaths = @(Get-ChildItem -LiteralPath $root -Recurse -File | Sort-Object FullName | Get-FileHash)
     Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+    $boundary = Wait-Until {
+        @([TestDesktop]::Windows($app.Process.Id) | Where-Object {
+            [TestDesktop]::Class($_) -eq '#32770' -and [TestDesktop]::Text($_) -match 'Traditional operation|传统操作'
+        } | Select-Object -First 1)
+    } 'A traditional deletion first discloses its separate exclusion boundary'
+    Assert-Equal ([TestDesktop]::Message($boundary, 0x0400).ToInt32() -band 0xFFFF) 2 'Traditional deletion boundary defaults to Cancel even when the old warning is disabled'
+    Close-AppDialog $boundary 2
+    Wait-AppIdle $app
+    Assert-Sequence @($allPaths.Path | Get-FileHash | ForEach-Object Hash) @($allPaths.Hash) 'Cancelling the boundary performs no deletion'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
     Wait-AppIdle $app
     Assert-True (-not [IO.Directory]::Exists($removed) -and -not [IO.File]::Exists($single)) `
         'Permanent deletion removes the selected folder, new descendants, and separately selected file'

@@ -252,8 +252,10 @@ static void TestNpm(const fs::path& run, const std::wstring& node)
         Check(p.state == State::Blocked && !Execute(p, none).started, "An npm content cache reparse point blocks the official command"); retained(f, cache);
     }
 }
+int RunRecycleBinScopeTests();
 int wmain(int argc, wchar_t** argv)
 {
+    if (argc == 2 && std::wstring(argv[1]) == L"--recycle-scope") return RunRecycleBinScopeTests();
     try
     {
         wchar_t temp[32768]{}; Check(GetTempPathW(32768, temp) != 0, "Temporary root available");

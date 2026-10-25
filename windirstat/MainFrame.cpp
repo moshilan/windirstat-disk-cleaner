@@ -831,10 +831,8 @@ void CMainFrame::OnTimer(const UINT_PTR nIDEvent)
         try
         {
             const auto result = m_cleanupQuery.get();
-            m_recycleBinItems = result[0];
-            m_recycleBinBytes = result[1];
-            m_shadowCopyCount = result[2];
-            m_shadowCopyBytes = result[3];
+            m_shadowCopyCount = result[0];
+            m_shadowCopyBytes = result[1];
             const auto [menu, position] = LocateNamedMenu(GetMenu(), Localization::Lookup(IDS_MENU_CLEANUP), false);
             if (menu != nullptr) UpdateCleanupMenu(menu, false);
         }

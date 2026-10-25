@@ -85,7 +85,6 @@ void CMainFrame::UpdateCleanupMenu(MenuRef menu, const bool triggerAsync)
 {
     // Define menu items structure with cached values
     struct { ULONGLONG* count; ULONGLONG* bytes; UINT menuId; LPCWSTR prefix; } menuItems[] = {
-        { &m_recycleBinItems, &m_recycleBinBytes, ID_CLEANUP_EMPTY_BIN, IDS_EMPTY_RECYCLEBIN.data() },
         { &m_shadowCopyCount, &m_shadowCopyBytes, ID_CLEANUP_REMOVE_SHADOW, IDS_MENU_REMOVE_SHADOW.data() }
     };
 
@@ -105,33 +104,14 @@ void CMainFrame::UpdateCleanupMenu(MenuRef menu, const bool triggerAsync)
 
     // Keep one background query alive until its results are collected by the UI.
     if (!triggerAsync || m_shuttingDown || m_cleanupQuery.valid()) return;
-    std::packaged_task<std::array<ULONGLONG, 4>()> query([]
+    std::packaged_task<std::array<ULONGLONG, 2>()> query([]
     {
-        std::array<ULONGLONG, 4> result{};
-        QueryRecycleBin(result[0], result[1]);
-        QueryShadowCopies(result[2], result[3]);
+        std::array<ULONGLONG, 2> result{};
+        QueryShadowCopies(result[0], result[1]);
         return result;
     });
     m_cleanupQuery = query.get_future();
     m_cleanupThread = std::jthread(std::move(query));
-}
-
-void CMainFrame::QueryRecycleBin(ULONGLONG& items, ULONGLONG& bytes)
-{
-    items = 0;
-    bytes = 0;
-
-    for (const std::wstring & drive : GetDriveList({DRIVE_FIXED, DRIVE_REMOVABLE, DRIVE_RAMDISK}))
-    {
-        SHQUERYRBINFO qbi{ .cbSize = sizeof(qbi) };
-        if (FAILED(::SHQueryRecycleBin((drive + L"\\").c_str(), &qbi)))
-        {
-            continue;
-        }
-
-        items += qbi.i64NumItems;
-        bytes += qbi.i64Size;
-    }
 }
 
 std::pair<MenuRef,int> CMainFrame::LocateNamedMenu(MenuRef menu, const std::wstring & subMenuText, const bool removeItems) const

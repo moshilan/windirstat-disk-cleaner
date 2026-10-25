@@ -23,7 +23,6 @@ void CPagePrompts::InitializePage()
     {
         PromptControl{ IDC_DELETION_WARNING,         IDS_MENU_DELETE,            {} },
         PromptControl{ IDC_DELETION_BIN_WARNING,     IDS_MENU_DELETE_BIN,        {} },
-        PromptControl{ IDC_PROMPT_EMPTY_BIN,         IDS_MENU_EMPTY_BIN,         {} },
         PromptControl{ IDC_PROMPT_CREATE_HARDLINK,   IDS_MENU_CREATE_HARDLINK,   {} },
         PromptControl{ IDC_PROMPT_REMOVE_MOTW,       IDS_MENU_REMOVE_MOTW,       {} },
         PromptControl{ IDC_PROMPT_DISABLE_HIBERNATE, IDS_MENU_DISABLE_HIBERNATE, {} },
@@ -39,6 +38,9 @@ void CPagePrompts::InitializePage()
         SetText(controlId, Localization::Format(IDS_PAGE_PROMPTS_OPERATION_CONFIRMATIONs,
             GetLocalizedMenuText(operationId, detail)));
     }
+    SetText(IDC_PROMPT_EMPTY_BIN, Localization::Lookup(IDS_RB_ALWAYS_CONFIRM));
+    ::CheckDlgButton(Handle(), IDC_PROMPT_EMPTY_BIN, BST_CHECKED);
+    GetDlgItem(IDC_PROMPT_EMPTY_BIN).EnableWindow(false);
 }
 
 std::optional<CPropertyPage::ValidationError> CPagePrompts::PrepareSettings()

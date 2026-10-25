@@ -439,7 +439,7 @@ function Test-S3DeletionFailure {
     $before = (Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__stats").deleted
     Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__control?delete=$($Case.Mode)" | Out-Null
     Add-Cleanup 'Reset S3 deletion fault' { Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__control?delete=" | Out-Null }
-    Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
     $dialog = Wait-Until { Get-StorageDeletionError $app } 'The deletion failure is displayed'
     Assert-True ($dialog.Message.Contains('403')) `
         'A failed delete or listing exposes the service error'
@@ -464,7 +464,7 @@ function Test-S3DeletionCancellation {
     $before = Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__stats"
     Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__control?delete=slow" | Out-Null
     Add-Cleanup 'Reset delayed S3 deletion' { Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__control?delete=" | Out-Null }
-    Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
     Wait-Until { (Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__stats").deleteSlow -gt $before.deleteSlow } `
         'A destructive response is delayed' | Out-Null
     $dialog = Wait-Until { Get-AppDialog $app 'IDC_PROGRESS_BAR' } 'Network deletion displays cancellable progress'
@@ -593,7 +593,7 @@ function Test-S3BatchOutcome {
     Select-AppRows $app $list @('bulk')
     $before = Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__stats"
     Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__control?delete=$($Case.Mode)" | Out-Null
-    Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
     if ($Case.Mode -ne 'unsupported') {
         $errorDialog = Wait-Until { Get-StorageDeletionError $app -AnyError } 'The batch outcome is reported'
         if ($Case.Mode -eq 'batch-partial') {
@@ -625,7 +625,7 @@ function Test-S3DeleteXmlKeys {
     foreach ($folder in 'invalid', 'xml') {
         $before = Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__stats"
         Select-AppRows $app $list @($folder)
-        Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+        Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
         Wait-AppIdle $app
         $after = Invoke-RestMethod "$env:WDS_S3_TEST_ENDPOINT/__stats"
         Assert-Equal ($after.deleted - $before.deleted) 2 'XML control and escaped keys retain exact delete identities'

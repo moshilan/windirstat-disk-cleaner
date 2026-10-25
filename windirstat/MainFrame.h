@@ -203,8 +203,6 @@ public:
     void MoveFocus(LOGICAL_FOCUS logicalFocus);
     void UpdatePaneText();
 
-    static void QueryRecycleBin(ULONGLONG& items, ULONGLONG& bytes);
-
     bool OnCreateClient() override;
     bool PreCreateWindow(CREATESTRUCT& cs) override;
 
@@ -245,11 +243,9 @@ public:
     TBPFLAG m_taskbarButtonPreviousState = TBPF_INDETERMINATE;
 
     // Cached values for cleanup menu queries (updated asynchronously)
-    ULONGLONG m_recycleBinItems = 0;
-    ULONGLONG m_recycleBinBytes = 0;
     ULONGLONG m_shadowCopyCount = 0;
     ULONGLONG m_shadowCopyBytes = 0;
-    std::future<std::array<ULONGLONG, 4>> m_cleanupQuery;
+    std::future<std::array<ULONGLONG, 2>> m_cleanupQuery;
     std::jthread m_cleanupThread;
 
 static std::span<const RouteEntry> Routes();

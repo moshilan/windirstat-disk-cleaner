@@ -230,6 +230,7 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClInclude Include="Cleanup\CleanupPreview.h" />
     <ClInclude Include="Cleanup\CleanupPlan.h" />
     <ClInclude Include="Cleanup\NuGetHttpCache.h" />
+    <ClInclude Include="Cleanup\RecycleBinScope.h" />
     <ClInclude Include="Dialogs\NuGetHttpCacheDlg.h" />
     <ClInclude Include="Dialogs\CleanupPlanDlg.h" />
     <ClInclude Include="Dialogs\CleanupPreviewDlg.h" />

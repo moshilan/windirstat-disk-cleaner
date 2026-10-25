@@ -500,7 +500,7 @@ function Test-StorageDeletion {
     [void][NativeListViewHelper]::FocusListView($list)
     Assert-True ([NativeListViewHelper]::SelectItems($list, [int[]]$indices)) 'The mixed deletion is selected'
     Assert-True (-not (Get-AppCommandState $app 'ID_CLEANUP_DELETE_BIN').Enabled) 'Remote selections have no recycle action'
-    Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
     Wait-AppIdle $app
     Assert-True (-not [IO.File]::Exists($localDelete) -and [IO.File]::Exists($localKeep)) `
         'Mixed deletion removes only the selected local file'
@@ -511,7 +511,7 @@ function Test-StorageDeletion {
     Expand-AppDirectory $app $list 'odd' '%23 &+.txt'
     Select-AppRows $app $list @('café 雪.txt', '%23 &+.txt')
     if ($protocol -eq 's3') { $before = Invoke-RestMethod "$endpoint/__stats" }
-    Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
     Wait-AppIdle $app
     if ($protocol -eq 's3') {
         $after = Invoke-RestMethod "$endpoint/__stats"
@@ -523,7 +523,7 @@ function Test-StorageDeletion {
         'Unicode, percent escapes, spaces, ampersands, and plus signs retain exact deletion identities'
     if ($protocol -eq 's3') {
         Select-AppRows $app $list @('a\b|c"d&%? #.txt', 'dots')
-        Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+        Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
         Wait-AppIdle $app
         $names = Get-StorageDeletionNames (Save-AppReport $app 'path-syntax') $target
         Assert-True ('odd/a\b|c"d&%? #.txt' -cnotin $names -and 'dots/../file' -cnotin $names) `
@@ -531,7 +531,7 @@ function Test-StorageDeletion {
     }
 
     Select-AppRows $app $list @('empty', 'local-empty')
-    Invoke-AppCommand $app 'ID_CLEANUP_EMPTY_FOLDER'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_EMPTY_FOLDER'
     Wait-AppIdle $app
     $names = Get-StorageDeletionNames (Save-AppReport $app 'emptied') $target
     Assert-True ('empty/member.txt' -cnotin $names -and (Find-AppRow $list 'empty' -Optional) -ge 0) `
@@ -549,7 +549,7 @@ function Test-StorageDeletion {
     })
     Assert-Equal $directory.Count 1 'The directory sharing a blob name is independently selectable'
     [void][NativeListViewHelper]::SelectItems($list, [int[]]$directory)
-    Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
     Wait-AppIdle $app
     $names = Get-StorageDeletionNames (Save-AppReport $app 'same-name') $target
     Assert-True (-not @($names | Where-Object { $_.StartsWith('same/', [StringComparison]::Ordinal) }).Count) `
@@ -569,7 +569,7 @@ function Test-StorageDeletion {
             Assert-True (Get-AppCommandState $app 'ID_CLEANUP_EMPTY_FOLDER').Enabled `
                 'The retained selection is the folder'
         } else { Select-AppRows $app $list @($folder) }
-        Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+        Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
         Wait-AppIdle $app
         if ($protocol -eq 's3' -and $folder -eq 'folder') {
             Assert-Equal ((Invoke-RestMethod "$endpoint/__stats").deleted - $before) 4 `
@@ -599,7 +599,7 @@ function Test-RemoteDeletionFailure {
     $app = Start-TestApp -Runner (New-RemoteRunner) -Roots @($target)
     $list = Get-AppList $app -AllFiles
     Select-AppRows $app $list @('locked')
-    Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
     $errorDialog = Wait-Until { Get-StorageDeletionError $app } 'A WebDAV member failure is displayed'
     Assert-True ($errorDialog.Message.Contains('423')) `
         'A 207 multistatus exposes the failed member status'
@@ -618,7 +618,7 @@ function Test-AzureDeletionPermission {
     $app = Start-TestApp -Runner $runner -Roots @($target)
     $list = Get-AppList $app -AllFiles
     Select-AppRows $app $list @('keep.txt')
-    Invoke-AppCommand $app 'ID_CLEANUP_DELETE'
+    Invoke-AppLegacyCommand $app 'ID_CLEANUP_DELETE'
     $errorDialog = Wait-Until { Get-StorageDeletionError $app } 'Read-only SAS deletion is rejected'
     Assert-True ($errorDialog.Message.Contains('403')) `
         'The service reports missing SAS deletion permission'

@@ -236,6 +236,7 @@
     <ClInclude Include="Cleanup\CleanupPreview.h"><Filter>Header Files\Core</Filter></ClInclude>
     <ClInclude Include="Cleanup\CleanupPlan.h"><Filter>Header Files\Core</Filter></ClInclude>
     <ClInclude Include="Cleanup\NuGetHttpCache.h"><Filter>Header Files\Core</Filter></ClInclude>
+    <ClInclude Include="Cleanup\RecycleBinScope.h"><Filter>Header Files\Core</Filter></ClInclude>
     <ClInclude Include="Dialogs\NuGetHttpCacheDlg.h"><Filter>Header Files\User Interface\Dialogs</Filter></ClInclude>
     <ClInclude Include="Dialogs\CleanupPlanDlg.h"><Filter>Header Files\User Interface\Dialogs</Filter></ClInclude>
     <ClInclude Include="Dialogs\CleanupPreviewDlg.h"><Filter>Header Files\User Interface\Dialogs</Filter></ClInclude>

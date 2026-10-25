@@ -6,7 +6,7 @@ on:
       verification:
         description: Verification suite (experiments use only self-created synthetic files)
         type: choice
-        options: [full, recycle-experiment, handle-isolation, handle-delete, windows-cleanup, nuget-http, pip-cache, npm-cache]
+        options: [full, recycle-experiment, handle-isolation, handle-delete, windows-cleanup, nuget-http, pip-cache, npm-cache, cleanup-scope]
         default: full
 
 permissions:
@@ -74,7 +74,7 @@ jobs:
         run: ./.github/scripts/Test-SyntheticScan.ps1 -Executable build/WinDirStat_x64.exe -OutputDirectory artifacts/records
 
       - name: Verify restricted read-only cleanup scanner
-        if: inputs.verification == 'full' || inputs.verification == 'windows-cleanup' || inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache'
+        if: inputs.verification == 'full' || inputs.verification == 'windows-cleanup' || inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache' || inputs.verification == 'cleanup-scope'
         run: |
           & $env:MSBUILD_EXE tests/CleanupPreviewTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/cleanup-tests-build.log;verbosity=normal'
           if ($LASTEXITCODE -ne 0) { throw 'Cleanup test executable build failed.' }
@@ -83,11 +83,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Read-only cleanup scanner regression failed.' }
 
       - name: Verify official cache cleanup on isolated synthetic caches
-        if: inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache'
+        if: inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache' || inputs.verification == 'cleanup-scope'
         run: |
           & $env:MSBUILD_EXE tests/NuGetHttpCacheTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/nuget-http-tests-build.log;verbosity=normal'
           if ($LASTEXITCODE -ne 0) { throw 'NuGet HTTP test build failed.' }
-          if ('${{ inputs.verification }}' -in @('pip-cache', 'npm-cache')) {
+          if ('${{ inputs.verification }}' -eq 'cleanup-scope') {
+            & intermediate/nuget-http-tests/NuGetHttpCacheTests.exe --recycle-scope | Tee-Object -FilePath artifacts/records/recycle-scope.jsonl
+          } elseif ('${{ inputs.verification }}' -in @('pip-cache', 'npm-cache')) {
             $python = (Get-Command python -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
             "WDS_TEST_PYTHON=$python" >> $env:GITHUB_ENV
             $withoutPip = Join-Path $env:RUNNER_TEMP ('WinDirStatTests-PipEnvironment-' + [guid]::NewGuid().ToString('N'))
@@ -107,11 +109,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Isolated official NuGet HTTP regression failed.' }
 
       - name: Verify scan policy and measure synthetic workloads
-        if: inputs.verification == 'full' || inputs.verification == 'windows-cleanup' || inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache'
+        if: inputs.verification == 'full' || inputs.verification == 'windows-cleanup' || inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache' || inputs.verification == 'cleanup-scope'
         run: |
           $reportRoot = Join-Path $env:RUNNER_TEMP 'scan-policy-results'
           # Keep fixtures; only official cache suites clear their own isolated cache fixtures via the official command.
           $scenarios = switch ('${{ inputs.verification }}') {
+            'cleanup-scope' { 'interaction.delete.0,interaction.dedup-groups' }
             'windows-cleanup' { 'cleanup.windows,cleanup.windows.zh' }
             'nuget-http' { 'cleanup.nuget,cleanup.nuget.zh' }
             'pip-cache' { 'cleanup.nuget,cleanup.nuget.zh,cleanup.pip,cleanup.pip.zh' }

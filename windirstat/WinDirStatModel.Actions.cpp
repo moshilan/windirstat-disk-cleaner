@@ -17,6 +17,26 @@
 #include "SearchDlg.h"
 #include "ProgressDlg.h"
 #include "Filtering.h"
+#include "Cleanup/RecycleBinScope.h"
+
+namespace
+{
+    std::optional<std::wstring> ProbeRecycleBinDrive(const std::wstring& root)
+    {
+        if (root.size() != 3 || root[0] < L'A' || root[0] > L'Z' || root[1] != L':' || root[2] != L'\\') return {};
+        const auto type = GetDriveTypeW(root.c_str());
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE && type != DRIVE_RAMDISK) return {};
+        std::array<wchar_t, 1024> device{};
+        const auto name = root.substr(0, 2);
+        if (!QueryDosDeviceW(name.c_str(), device.data(), static_cast<DWORD>(device.size())) ||
+            std::wstring_view(device.data()).starts_with(L"\\??\\")) return {}; // Do not infer a whole-volume scope from SUBST aliases.
+        std::array<wchar_t, 64> volume{};
+        SHQUERYRBINFO info{ .cbSize = sizeof(info) };
+        if (!GetVolumeNameForVolumeMountPointW(root.c_str(), volume.data(), static_cast<DWORD>(volume.size())) ||
+            !volume[0] || FAILED(SHQueryRecycleBinW(root.c_str(), &info))) return {};
+        return std::wstring(volume.data()) + L"|" + device.data();
+    }
+}
 
 static std::optional<std::wstring> ChooseReportPath(const CDialog::FilePickerMode mode)
 {
@@ -103,7 +123,7 @@ void CWinDirStatModel::OnUpdateCentralHandler(CCmdUI* pCmdUI)
         { ID_CLEANUP_DISM_ANALYZE,    { true,  true,  true,  LF_NONE,     ITF_ANY, isElevationPossible } },
         { ID_CLEANUP_DISM_NORMAL,     { true,  true,  false, LF_NONE,     ITF_ANY, isElevationPossible } },
         { ID_CLEANUP_DISM_RESET,      { true,  true,  false, LF_NONE,     ITF_ANY, isElevationPossible } },
-        { ID_CLEANUP_EMPTY_BIN,       { true,  true,  false, LF_NONE,     ITF_ANY } },
+        { ID_CLEANUP_EMPTY_BIN,       { false, true,  false, LF_FILETREE, IT_DRIVE, filesystemOnly } },
         { ID_CLEANUP_EMPTY_FOLDER,    { true,  true,  false, LF_NONE,     IT_DIRECTORY, isDeletable } },
         { ID_CLEANUP_REMOVE_EMPTY,    { false, true,  false, LF_FILETREE, IT_DRIVE | IT_DIRECTORY, filesystemOnly } },
         { ID_CLEANUP_EXPLORER_SELECT, { false, true,  true,  LF_NONE,     IT_DIRECTORY | IT_FILE, hasShellIdentity } },
@@ -319,25 +339,57 @@ void CWinDirStatModel::OnEditCopy()
 
 void CWinDirStatModel::OnCleanupEmptyRecycleBin() const
 {
-    if (!ConfirmOperation(IDS_MENU_EMPTY_BIN, COptions::ShowEmptyRecycleBinPrompt)) return;
-
-    CProgressDlg(0, CProgressDlg::Flags::NoCancel, GetMainWindow(), [](CProgressDlg*)
+    namespace Scope = Cleanup::RecycleBinScope;
+    // A GUI fixture can never reach the real Shell empty operation, including direct command messages.
+    if (::GetEnvironmentVariableW(L"WDS_CLEANUP_TEST_ROOT", nullptr, 0) || !HasRootItem() || !IsScanSettled() ||
+        CMainFrame::Get()->GetLogicalFocus() != LF_FILETREE)
     {
-        SHEmptyRecycleBin(GetMainWindowHandle(), nullptr,
-            SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND);
-    }).ShowModal();
-
-    // locate all drive items in order to refresh recyclers
-    std::vector<CItem*> toRefresh;
-    for (const auto& drive : GetRootItem()->GetDriveItems())
-    {
-        if (CItem* recycler = drive->FindRecyclerItem(); recycler != nullptr)
-        {
-            toRefresh.push_back(recycler);
-        }
+        ::MessageBoxW(GetMainWindowHandle(), Localization::Lookup(IDS_RB_SCOPE_BLOCKED).c_str(),
+            Localization::Lookup(IDS_RB_TITLE).c_str(), MB_OK | MB_ICONWARNING);
+        return;
     }
-
-    // refresh recyclers
+    const auto selected = Get()->GetAllSelected();
+    std::vector<std::wstring> roots;
+    for (const auto* item : selected)
+        roots.push_back(item && item->IsTypeOrFlag(IT_DRIVE) && item->SupportsFilesystemApis() ? item->GetPath() : L"");
+    const auto scope = Scope::Prepare(roots, ProbeRecycleBinDrive);
+    if (!scope.Valid())
+    {
+        ::MessageBoxW(GetMainWindowHandle(), Localization::Lookup(IDS_RB_SCOPE_BLOCKED).c_str(),
+            Localization::Lookup(IDS_RB_TITLE).c_str(), MB_OK | MB_ICONWARNING);
+        return;
+    }
+    std::wstring paths;
+    for (const auto& target : scope.GetTargets()) paths += target.root + L"\r\n";
+    // Always confirm the immutable whole-drive scope; the old optional prompt setting cannot suppress this.
+    if (::MessageBoxW(GetMainWindowHandle(), Localization::Format(IDS_RB_CONFIRM, paths).c_str(),
+        Localization::Lookup(IDS_RB_TITLE).c_str(), MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) != IDOK) return;
+    Scope::Result result;
+    CProgressDlg(scope.GetTargets().size(), CProgressDlg::Flags::None, GetMainWindow(), [&](CProgressDlg* progress)
+    {
+        result = Scope::Execute(scope, true, ProbeRecycleBinDrive, [&](const std::wstring& root) -> std::int32_t
+        {
+            if (root.size() != 3 || root[1] != L':' || root[2] != L'\\') return E_INVALIDARG;
+            const ComApartmentScope com;
+            if (!com) return E_FAIL;
+            const auto status = SHEmptyRecycleBinW(GetMainWindowHandle(), root.c_str(),
+                SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND);
+            progress->Increment();
+            return status;
+        }, [&] { return progress->IsCancelled(); });
+    }).ShowModal();
+    std::wstring details = Localization::Lookup(IDS_RB_RESULT_NOTICE) + L"\r\n\r\n";
+    std::vector<CItem*> toRefresh;
+    for (const auto& item : result.items)
+    {
+        const auto state = item.state == Scope::State::Succeeded ? IDS_RB_SUCCESS : item.state == Scope::State::Failed ? IDS_RB_FAILED :
+            item.state == Scope::State::Cancelled ? IDS_RB_CANCELLED : item.state == Scope::State::Blocked ? IDS_RB_BLOCKED : IDS_RB_SKIPPED;
+        details += Localization::Format(IDS_RB_RESULT_ITEM, item.root, Localization::Lookup(state), static_cast<unsigned long>(item.error)) + L"\r\n";
+        if (item.state != Scope::State::Succeeded && item.state != Scope::State::Failed) continue;
+        for (const auto* drive : selected) if (drive && _wcsicmp(drive->GetPath().c_str(), item.root.c_str()) == 0)
+            if (auto* recycler = drive->FindRecyclerItem()) toRefresh.push_back(recycler);
+    }
+    ::MessageBoxW(GetMainWindowHandle(), details.c_str(), Localization::Lookup(IDS_RB_TITLE).c_str(), MB_OK | MB_ICONINFORMATION);
     if (!toRefresh.empty()) Get()->StartScanningEngine(toRefresh);
 }
 
@@ -761,7 +813,7 @@ void CWinDirStatModel::RunUserDefinedCleanup(const size_t index)
     std::wstring detail = udc->Title.Obj();
     if (udc->RecurseIntoSubdirectories)
         detail = std::format(L"{}; {}", detail, GetLocalizedMenuText(IDS_PAGE_CLEANUPS_RECURSE));
-    if (items.empty() || !worksForAll ||
+    if (items.empty() || !worksForAll || !ConfirmLegacyCleanupBoundary(true) ||
         !ConfirmOperation(IDS_USER_DEFINED_CLEANUP, udc->AskForConfirmation, items, detail)) return;
 
     std::vector<CItem*> refreshQueue;
@@ -1536,7 +1588,7 @@ void CWinDirStatModel::OnCreateHardlink()
     }
 
     // Confirm only replacement targets, excluding the source retained in each group.
-    if (targets.empty() || !ConfirmOperation(IDS_MENU_CREATE_HARDLINK,
+    if (targets.empty() || !ConfirmLegacyCleanupBoundary() || !ConfirmOperation(IDS_MENU_CREATE_HARDLINK,
         COptions::ShowCreateHardlinkPrompt, targets)) return;
 
     // Replace each target with a hardlink to its group's source.

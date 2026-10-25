@@ -136,6 +136,24 @@ function Invoke-AppCommand {
     if ($tabName) { Wait-AppTab $App $tabName }
 }
 
+function Invoke-AppLegacyCommand {
+    param([object] $App, [string] $Symbol)
+    # Explicit opt-in for existing destructive tests on their owned synthetic fixtures, never Recycle Bin emptying.
+    if ($Symbol -notin @('ID_CLEANUP_DELETE', 'ID_CLEANUP_EMPTY_FOLDER', 'ID_CLEANUP_CREATE_HARDLINK') -or
+        -not $script:Context.Apps.Contains($App)) { throw 'Legacy test confirmation requires an owned app and an allowed synthetic operation.' }
+    $null = Assert-OwnedPath $script:Context.Fixture
+    Invoke-AppCommand $App $Symbol
+    $prompt = Wait-Until {
+        @([TestDesktop]::Windows($App.Process.Id) | Where-Object {
+            [TestDesktop]::Class($_) -eq '#32770' -and [TestDesktop]::IsWindowVisible($_) -and
+            [TestDesktop]::Text($_) -match 'Traditional operation|传统操作' -and
+            [TestDesktop]::GetDlgItem($_, 1) -ne [IntPtr]::Zero -and [TestDesktop]::GetDlgItem($_, 2) -ne [IntPtr]::Zero
+        } | Select-Object -First 1)
+    } 'The traditional operation requires its separate protection-boundary confirmation'
+    Assert-Equal ([TestDesktop]::Message($prompt, 0x0400).ToInt32() -band 0xFFFF) 2 'The boundary confirmation defaults to Cancel'
+    Close-AppDialog $prompt 1
+}
+
 function Wait-AppIdle {
     param([object] $App, [int] $Seconds = $TimeoutSeconds)
     Wait-Until {

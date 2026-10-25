@@ -499,6 +499,7 @@ void CWinDirStatModel::DeletePhysicalItems(const std::vector<CItem*>& items, con
     const bool hasRemoteItems = std::ranges::any_of(items,
         [](const CItem* item) { return item->IsTypeOrFlag(ITF_REMOTE); });
     if (toTrashBin && hasRemoteItems) return;
+    if (items.empty() || !ConfirmLegacyCleanupBoundary()) return;
     auto& showDeleteWarning = toTrashBin ?
         COptions::ShowDeleteToRecycleBinWarning : COptions::ShowDeletePermanentlyWarning;
     if (showDeleteWarning)
@@ -715,6 +716,12 @@ void CWinDirStatModel::SetZoomItem(CItem* item)
 void CWinDirStatModel::RefreshItem(const std::vector<CItem*>& item) const
 {
     Get()->StartScanningEngine(item);
+}
+
+bool CWinDirStatModel::ConfirmLegacyCleanupBoundary(const bool customCommand)
+{
+    return ::MessageBoxW(GetMainWindowHandle(), Localization::Lookup(customCommand ? IDS_LEGACY_CUSTOM_BOUNDARY : IDS_LEGACY_BOUNDARY).c_str(),
+        Localization::Lookup(IDS_LEGACY_BOUNDARY_TITLE).c_str(), MB_OKCANCEL | MB_ICONWARNING | MB_DEFBUTTON2) == IDOK;
 }
 
 bool CWinDirStatModel::ConfirmOperation(const std::wstring_view operationId, Setting<bool>& prompt,
