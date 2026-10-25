@@ -5,6 +5,7 @@
 #include "CleanupPreviewDlg.h"
 #include "CleanupPlanDlg.h"
 #include "NuGetHttpCacheDlg.h"
+#include "SpaceRecheckDlg.h"
 
 namespace
 {
@@ -769,40 +770,11 @@ void CCleanupPreviewDlg::OpenOfficialCache(std::wstring tool, const Cleanup::NuG
 void CCleanupPreviewDlg::OpenWindowsCleanup(const bool recommendations)
 {
     if (m_scanning) return;
-    const auto title = Localization::Lookup(recommendations ? IDS_CP_WINDOWS_RECOMMENDATIONS : IDS_CP_WINDOWS_DISK);
-    if (::MessageBoxW(Handle(), Localization::Format(IDS_CP_WINDOWS_CONFIRM, title).c_str(), title.c_str(),
-        MB_OKCANCEL | MB_ICONINFORMATION | MB_DEFBUTTON2) != IDOK)
-    {
-        SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_WINDOWS_CANCELLED));
-        return;
-    }
-    const auto& systemDirectory = GetSysDirectory();
-    if (!recommendations && systemDirectory.empty())
-    {
-        SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_WINDOWS_UNAVAILABLE));
-        SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_WINDOWS_MANUAL));
-        return;
-    }
-    const std::wstring target = recommendations ? L"ms-settings:storagerecommendations" : systemDirectory + L"\\cleanmgr.exe";
-    // Fixed official target, interactive only. No candidate paths, switches, runas or fallback.
-    SHELLEXECUTEINFOW launch{};
-    launch.cbSize = sizeof(launch);
-    launch.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
-    launch.hwnd = Handle();
-    launch.lpVerb = L"open";
-    launch.lpFile = target.c_str();
-    launch.nShow = SW_SHOWNORMAL;
-    if (!::ShellExecuteExW(&launch))
-    {
-        const auto error = GetLastError();
-        SetText(IDC_CP_STATUS, error == ERROR_CANCELLED ? Localization::Lookup(IDS_CP_WINDOWS_CANCELLED) :
-            Localization::Format(IDS_CP_WINDOWS_FAILED, title, error));
-        SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_WINDOWS_MANUAL));
-        return;
-    }
-    // Accepting a launch request proves neither cleanup completion nor released allocation.
-    SetText(IDC_CP_STATUS, Localization::Lookup(IDS_CP_WINDOWS_REQUESTED));
-    SetText(IDC_CP_DETAILS, Localization::Lookup(IDS_CP_WINDOWS_MANUAL));
+    CSpaceRecheckDlg dialog(this, recommendations, m_fixture && m_optionsValid ? m_options.localAppData : L"");
+    // An invalid fixture override must never fall back to real Windows tools.
+    if (::GetEnvironmentVariableW(L"WDS_CLEANUP_TEST_ROOT", nullptr, 0) != 0 && (!m_fixture || !m_optionsValid)) return;
+    dialog.ShowModal();
+    SetText(IDC_CP_STATUS, Localization::Lookup(dialog.Started() ? IDS_SR_CLOSED : IDS_CP_WINDOWS_CANCELLED));
 }
 void CCleanupPreviewDlg::OnSelectAll()
 {

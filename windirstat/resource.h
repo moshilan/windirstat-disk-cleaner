@@ -477,13 +477,25 @@
 #define IDC_CP_PIP                      1237
 #define IDC_CP_NPM                      1238
 
+#define IDD_SPACE_RECHECK               127
+#define IDC_SR_TOOL                    1239
+#define IDC_SR_NOTICE                  1240
+#define IDC_SR_DRIVE                    1241
+#define IDC_SR_DIRECTORY                1242
+#define IDC_SR_BROWSE                   1243
+#define IDC_SR_BASELINE                 1244
+#define IDC_SR_RECHECK                  1245
+#define IDC_SR_STOP                     1246
+#define IDC_SR_RESULT                   1247
+#define IDC_SR_STATUS                   1248
+
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        127
+#define _APS_NEXT_RESOURCE_VALUE        128
 #define _APS_NEXT_COMMAND_VALUE         32971
-#define _APS_NEXT_CONTROL_VALUE         1239
+#define _APS_NEXT_CONTROL_VALUE         1249
 #define _APS_NEXT_SYMED_VALUE           127
 #endif
 #endif

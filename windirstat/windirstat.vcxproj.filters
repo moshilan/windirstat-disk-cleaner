@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Header Files">
@@ -233,6 +233,8 @@
     <ClInclude Include="Pages\PagePrompts.h">
       <Filter>Header Files\User Interface\Pages</Filter>
     </ClInclude>
+    <ClInclude Include="Cleanup\SpaceRecheck.h"><Filter>Header Files\Core</Filter></ClInclude>
+    <ClInclude Include="Dialogs\SpaceRecheckDlg.h"><Filter>Header Files\User Interface\Dialogs</Filter></ClInclude>
     <ClInclude Include="Cleanup\CleanupPreview.h"><Filter>Header Files\Core</Filter></ClInclude>
     <ClInclude Include="Cleanup\CleanupPlan.h"><Filter>Header Files\Core</Filter></ClInclude>
     <ClInclude Include="Cleanup\NuGetHttpCache.h"><Filter>Header Files\Core</Filter></ClInclude>
@@ -482,6 +484,8 @@
     <ClCompile Include="Controls\FileDupeControl.cpp">
       <Filter>Source Files\User Interface\Controls</Filter>
     </ClCompile>
+    <ClCompile Include="Cleanup\SpaceRecheck.cpp"><Filter>Source Files\Core</Filter></ClCompile>
+    <ClCompile Include="Dialogs\SpaceRecheckDlg.cpp"><Filter>Source Files\User Interface\Dialogs</Filter></ClCompile>
     <ClCompile Include="Cleanup\CleanupPreview.cpp"><Filter>Source Files\Core</Filter></ClCompile>
     <ClCompile Include="Cleanup\CleanupPlan.cpp"><Filter>Source Files\Core</Filter></ClCompile>
     <ClCompile Include="Cleanup\NuGetHttpCache.cpp"><Filter>Source Files\Core</Filter></ClCompile>

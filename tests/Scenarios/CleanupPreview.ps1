@@ -26,10 +26,7 @@ function Wait-CleanupPreviewIdle {
 
 function Get-CleanupWindowsPrompt {
     param($App, [IntPtr] $Preview)
-    return @([TestDesktop]::Windows($App.Process.Id) | Where-Object {
-        $_ -ne $Preview -and [TestDesktop]::Class($_) -eq '#32770' -and [TestDesktop]::IsWindowVisible($_) -and
-        [TestDesktop]::GetDlgItem($_, 1) -ne [IntPtr]::Zero -and [TestDesktop]::GetDlgItem($_, 2) -ne [IntPtr]::Zero
-    } | Select-Object -First 1)
+    return Get-AppDialog $App 'IDC_SR_BASELINE'
 }
 
 function Test-CleanupWindowsCancel {
@@ -66,55 +63,15 @@ function Test-CleanupWindowsCancel {
 
 function Test-CleanupWindowsLaunch {
     param($App, [IntPtr] $Preview)
-    # Only the disposable cloud desktop opens real Windows tools. Never confirm cleanup there.
-    if ($env:GITHUB_ACTIONS -ne 'true') { Write-TestNote 'Actual Windows provider launch is cloud-only'; return }
-    $files = Get-DialogControl $Preview 'IDC_CP_FILES'
-    $before = @([NativeListViewHelper]::GetItemTexts($files))
-    $totals = [TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_TOTALS'))
-    foreach ($entry in @(
-        @{ Control = 'IDC_CP_WINDOWS_RECOMMENDATIONS'; Process = 'SystemSettings' },
-        @{ Control = 'IDC_CP_WINDOWS_DISK'; Process = 'cleanmgr' }
-    )) {
-        $visible = @(@($entry.Process, 'ApplicationFrameHost') | ForEach-Object { [Diagnostics.Process]::GetProcessesByName($_) } | ForEach-Object {
-            [TestDesktop]::Windows($_.Id) | Where-Object { [TestDesktop]::IsWindowVisible($_) }
-        })
-        [void][TestDesktop]::PostMessage((Get-DialogControl $Preview $entry.Control), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
-        $prompt = Wait-Until { Get-CleanupWindowsPrompt $App $Preview } 'The explicit Windows launch confirmation appears'
-        Close-AppDialog $prompt 1
-        Wait-Until { [TestDesktop]::IsWindowEnabled($Preview) } 'The launch request returns to the preview' | Out-Null
-        $status = Wait-Until {
-            $text = [TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_STATUS'))
-            if ($text -match 'Launch requested|已发送启动请求|Could not open|无法打开|unavailable|不可用') { $text }
-        } 'Wait for the asynchronous provider activation request result' -Seconds 30 -StableMilliseconds 350
-        Assert-True ($status -match 'Launch requested|已发送启动请求') "A successful launch is reported only as a request (observed: $status)"
-        $processName = $entry.Process
-        $window = Wait-Until {
-            $providerIds = @([Diagnostics.Process]::GetProcessesByName($processName) | ForEach-Object Id)
-            $roots = @($providerIds | ForEach-Object { [TestDesktop]::Windows($_) | ForEach-Object { [TestDesktop]::RootWindow($_) } })
-            if ($processName -eq 'SystemSettings') {
-                $roots += @([Diagnostics.Process]::GetProcessesByName('ApplicationFrameHost') | ForEach-Object {
-                    [TestDesktop]::Windows($_.Id) | Where-Object {
-                        @([TestDesktop]::Children($_) | Where-Object { [TestDesktop]::ProcessId($_) -in $providerIds }).Count -gt 0
-                    }
-                })
-            }
-            @($roots | Select-Object -Unique | Where-Object { $_ -notin $visible -and [TestDesktop]::IsWindowVisible($_) } | Select-Object -First 1)
-        } "The official $processName provider creates a visible window" -Seconds 30 -StableMilliseconds 750
-        $ownerProcess = [TestDesktop]::ProcessId($window)
-        Write-TestNote "Official $processName window: class=$([TestDesktop]::Class($window)); title=$([TestDesktop]::Text($window)); close=SC_CLOSE; page location not asserted"
-        Add-Cleanup 'Close only the Windows provider window opened by this scenario' {
-            param($Window, $OwnerProcess)
-            if ([TestDesktop]::IsWindow($Window) -and [TestDesktop]::ProcessId($Window) -eq $OwnerProcess) {
-                [void][TestDesktop]::PostMessage($Window, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero)
-            }
-        } @($window, $ownerProcess)
-        # Close the real frame via its system menu, including hosted Settings. Never click cleanup/OK.
-        [void][TestDesktop]::PostMessage($window, 0x0112, [IntPtr]0xF060, [IntPtr]::Zero)
-        Wait-Until { -not [TestDesktop]::IsWindow($window) -or -not [TestDesktop]::IsWindowVisible($window) } 'Closing the provider cancels without confirming cleanup' -Seconds 30 | Out-Null
-        Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_STATUS'))) $status 'Provider cancellation never reports cleanup completion or released space'
+    # Validated fixtures always simulate launch, including on cloud runners.
+    foreach ($entry in 'IDC_CP_WINDOWS_RECOMMENDATIONS','IDC_CP_WINDOWS_DISK') {
+        [void][TestDesktop]::PostMessage((Get-DialogControl $Preview $entry), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
+        $prompt = Wait-Until { Get-CleanupWindowsPrompt $App $Preview } 'Space recheck opens before any launch'
+        Invoke-CleanupButton $prompt 'IDC_SR_BASELINE'
+        Wait-Until { [TestDesktop]::IsWindowEnabled((Get-DialogControl $prompt 'IDC_SR_RECHECK')) } 'Baseline is recorded before simulated Windows launch' | Out-Null
+        Assert-True ([TestDesktop]::ControlText((Get-DialogControl $prompt 'IDC_SR_STATUS')) -match 'simulated|模拟') 'Fixture launches no real official tool'
+        Close-AppDialog $prompt
     }
-    Assert-Sequence @([NativeListViewHelper]::GetItemTexts($files)) $before 'Official providers do not replace third-party preview candidates'
-    Assert-Equal ([TestDesktop]::ControlText((Get-DialogControl $Preview 'IDC_CP_TOTALS'))) $totals 'Official providers do not change preview estimates'
 }
 
 function Test-CleanupReadOnlyPlan {

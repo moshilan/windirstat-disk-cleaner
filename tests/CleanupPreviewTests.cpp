@@ -1,4 +1,4 @@
-// Read-only preview behavioral tests. All writes target a fresh, explicitly named fixture.
+﻿// Read-only preview behavioral tests. All writes target a fresh, explicitly named fixture.
 #include <windows.h>
 #include <winioctl.h>
 #include <sddl.h>
@@ -13,6 +13,7 @@
 #include <vector>
 #include "Cleanup/CleanupPreview.h"
 #include "Cleanup/CleanupPlan.h"
+#include "Cleanup/SpaceRecheck.h"
 namespace fs = std::filesystem;
 static unsigned checks = 0;
 static void Check(bool ok, const char* message) { ++checks; if (!ok) throw std::runtime_error(message); }
@@ -395,9 +396,62 @@ static void RunPlanGuardTests(const fs::path& root, std::uint64_t now, std::uint
         "An ancestor junction substituted after eligibility is skipped without touching its target");
     Check(Snapshot(fixture) == expected, "Redirection checks preserve the sentinel and retained directory contents");
 }
+static void SpaceRecheckMocks()
+{
+    using namespace Cleanup::SpaceRecheck;
+    Snapshot baseline;
+    Check(!Comparable(baseline, baseline), "Unmeasured snapshots cannot be compared");
+    baseline.state = State::Ready;
+    baseline.root = L"C:\\";
+    baseline.directory = L"C:\\synthetic";
+    baseline.volumeId = L"synthetic-volume|device";
+    baseline.directoryId = L"1:0:123";
+    baseline.capacity = 1000;
+    baseline.available = 100;
+    baseline.logical = 200;
+    baseline.allocated = 256;
+    Check(Comparable(baseline, baseline), "Same successful observation target compares");
+    auto after = baseline;
+    after.available = 300;
+    after.logical = 400;
+    Check(Comparable(baseline, after), "Free-space increase can coincide with directory growth");
+    after.available = 0;
+    Check(Comparable(baseline, after), "Free-space decrease remains a valid observation");
+    after.available = baseline.available;
+    Check(Comparable(baseline, after), "Zero available-space change remains valid");
+    for (auto state : { State::Failed, State::Cancelled, State::Changed })
+    {
+        after = baseline; after.state = state;
+        Check(!Comparable(baseline, after), "Failed, cancelled or changed result cannot compare");
+        Check(!Comparable(after, baseline), "Invalid baseline cannot compare");
+    }
+    after = baseline; after.root = L"D:\\";
+    Check(!Comparable(baseline, after), "Different drive refused");
+    after = baseline; after.volumeId += L"-replacement";
+    Check(!Comparable(baseline, after), "Replaced volume refused");
+    after = baseline; after.volumeId.clear();
+    Check(!Comparable(baseline, after), "Unknown volume refused");
+    after = baseline; ++after.capacity;
+    Check(!Comparable(baseline, after), "Changed capacity refused");
+    after = baseline; after.directory += L"-sibling";
+    Check(!Comparable(baseline, after), "Changed selected directory refused");
+    after = baseline; after.directoryId += L"-replacement";
+    Check(!Comparable(baseline, after), "Replaced selected directory refused");
+    after = baseline; after.directoryComplete = false;
+    Check(Comparable(baseline, after), "Partial directory does not lose volume observation");
+    after = baseline; after.directoryId.clear(); after.directoryComplete = false;
+    Check(Comparable(baseline, after), "Missing directory identity still allows only volume observation");
+    after = baseline; after.directory.clear(); after.directoryId.clear();
+    Check(!Comparable(baseline, after), "Switching from a directory to drive-only invalidates baseline");
+    Check(baseline.available == 100 && baseline.logical == 200, "Rechecks preserve baseline");
+}
 int wmain(int argc, wchar_t** argv)
 {
     try {
+        SpaceRecheckMocks();
+        if (argc == 2 && std::wstring(argv[1]) == L"--space-recheck") {
+            std::cout << "{\"space_recheck_mock_checks\":" << checks << ",\"real_cleanup_calls\":0}\n"; return 0;
+        }
         if (argc != 2) throw std::runtime_error("Pass one fresh synthetic fixture path");
         const fs::path root = fs::path(argv[1]).lexically_normal();
         if (!root.is_absolute() || root.filename().wstring().find(L"WinDirStatCleanupTests-") != 0 || fs::exists(root))
