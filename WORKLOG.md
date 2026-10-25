@@ -453,3 +453,10 @@
 ## 2026-10-25 22:32
 - 首轮cleanup-scope云端40202219162：主程序/核心/native均0警告/0错误，核心493与范围模拟98通过，real_shell_calls=0；合成硬链接GUI41通过。删除GUI在取消后哈希比对少一个值而失败，打包跳过，记录Artifact12602785262 SHA256=75f36fc02f28b57e0a3f9b0d501329f5ff8ee0572538fc539e6d74d5cf17da52已核验并保留.local。
 - 失败样本含brackets[1]目录。新增断言把字符串路径传Get-FileHash默认Path参数，按通配符解释而漏读。仅自建.local路径复现LiteralCount1/ImplicitPathCount0，改取消断言及同一既有测试前后哈希统一用LiteralPath；不放宽断言、不改生产保护，PS语法与diff检查通过，待重跑。
+
+
+## 2026-10-25 22:40
+- P0复验ef25ffe标准Runner40202782966全部通过：核心493+范围mock98+合成硬链接41+合成删除/取消78=710项，三次编译0警告/0错误，双语合成扫描不变。回收站用例完全内存模拟、真实SHEmptyRecycleBin调用0；其他GUI处置仅自建合成文件。
+- 已核对原始日志/JSON、Artifact摘要、EXE及清单；交付2.10.0.2243、3451904字节，SHA256=4e189ab25c1c1a028b2f0f35fa4d2ce93ad6c088704fa12541f9d5162298029c，23项系统DLL，AutoElevate=0。证据.local/cloud-build/40202782966/verification.json。首轮失败及LiteralPath复现均保留，不把失败状态记为通过。
+- 安全/UX静态首轮通过，传统操作默认取消与取消不改变文件已GUI验证；真实回收站、多盘真实设备及其范围窗口未运行，原检查至Shell盘符竞态仍在，传统执行器仍不采用新排除规则。Remote/S3适配只做语法核查，未扩大测试/功能范围。
+- 构建基线与本日志追加最终证据；源码已推送，最终证据checkpoint按规则仅本地保存。垃圾预览/计划/官方缓存逻辑无改动，检查最终Git diff/status后停止。
