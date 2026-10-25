@@ -156,6 +156,9 @@ std::wstring CSpaceRecheckDlg::Describe(const Cleanup::SpaceRecheck::Snapshot& v
         text += L"\r\n" + Localization::Format(IDS_SR_DIRECTORY_SAMPLE, value.directory,
             FormatBytes(value.logical), FormatBytes(value.allocated), FormatCount(value.files), FormatCount(value.skipped)) +
             L"\r\n" + Localization::Lookup(value.directoryComplete ? IDS_SR_DIRECTORY_NOTE : IDS_SR_PARTIAL);
+    // Multiline Win32 edits require CRLF; translated resource strings contain LF.
+    for (size_t i = 0; i < text.size(); ++i)
+        if (text[i] == L'\n' && (i == 0 || text[i - 1] != L'\r')) text.insert(i++, 1, L'\r');
     return text;
 }
 void CSpaceRecheckDlg::ShowResult()

@@ -40,6 +40,8 @@ function Test-SpaceRecheck {
         Wait-SpaceRecheckIdle $dialog
         $baseline = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_SR_RESULT'))
         Assert-True ($baseline -match '16[, .]?384') 'Complete enumeration includes parent and nested siblings exactly once'
+        Assert-True ($baseline -match '\r\n(?:Identity|卷身份)') 'Volume identity starts on its own line in the native edit'
+        Assert-True ($baseline -match '\r\n(?:Sampling|采样时间)') 'Sampling interval starts on its own line in the native edit'
         Assert-True ($baseline -match 'UTC') 'Sampling time is visible with an explicit time zone'
         Assert-True ($baseline -match 'Volume\{') 'Volume identity is visible with the baseline'
         Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_SR_STATUS')) -match 'simulated|模拟') 'Baseline precedes simulated launch; no official cleanup runs'
