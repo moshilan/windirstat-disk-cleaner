@@ -57,9 +57,9 @@ int wmain()
         Check(!IA::Convert(record), "Nameless records do not invent an application name");
 
         IA::Item large{ IA::Source::Machine64, L"a", L"Alpha", L"Vendor", L"1", L"C:\\One", 4096 };
-        IA::Item small{ IA::Source::Machine32, L"b", L"Beta", L"Other", L"2", L"C:\\Two", 1024 };
+        IA::Item smallerApp{ IA::Source::Machine32, L"b", L"Beta", L"Other", L"2", L"C:\\Two", 1024 };
         IA::Item unknown{ IA::Source::Msix, L"c", L"中文 App", L"Vendor", L"3", L"", std::nullopt };
-        std::vector<IA::Item> items{ small, unknown, large };
+        std::vector<IA::Item> items{ smallerApp, unknown, large };
         Check(IA::Select(items, L"", true) == std::vector<size_t>({ 2, 0, 1 }), "Descending numerical size, unknown last");
         Check(IA::Select(items, L"", false) == std::vector<size_t>({ 0, 2, 1 }), "Ascending keeps unknown last");
         Check(IA::Select(items, L"aLpHa", true) == std::vector<size_t>({ 2 }), "Search ignores case");
