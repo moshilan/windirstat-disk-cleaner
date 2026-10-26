@@ -6,7 +6,7 @@ on:
       verification:
         description: Verification suite (experiments use only self-created synthetic files)
         type: choice
-        options: [full, recycle-experiment, handle-isolation, handle-delete, windows-cleanup, nuget-http, pip-cache, npm-cache, cleanup-scope, space-recheck]
+        options: [full, recycle-experiment, handle-isolation, handle-delete, windows-cleanup, nuget-http, pip-cache, npm-cache, cleanup-scope, space-recheck, installed-apps]
         default: full
 
 permissions:
@@ -74,7 +74,7 @@ jobs:
         run: ./.github/scripts/Test-SyntheticScan.ps1 -Executable build/WinDirStat_x64.exe -OutputDirectory artifacts/records
 
       - name: Verify restricted read-only cleanup scanner
-        if: inputs.verification == 'space-recheck' || inputs.verification == 'full' || inputs.verification == 'windows-cleanup' || inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache' || inputs.verification == 'cleanup-scope'
+        if: inputs.verification == 'installed-apps' || inputs.verification == 'space-recheck' || inputs.verification == 'full' || inputs.verification == 'windows-cleanup' || inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache' || inputs.verification == 'cleanup-scope'
         run: |
           & $env:MSBUILD_EXE tests/CleanupPreviewTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/cleanup-tests-build.log;verbosity=normal'
           if ($LASTEXITCODE -ne 0) { throw 'Cleanup test executable build failed.' }
@@ -83,6 +83,14 @@ jobs:
           $fixture = Join-Path $env:RUNNER_TEMP ('WinDirStatCleanupTests-' + [guid]::NewGuid().ToString('N'))
           & intermediate/cleanup-tests/CleanupPreviewTests.exe $fixture | Set-Content artifacts/records/cleanup-core.json -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw 'Read-only cleanup scanner regression failed.' }
+
+      - name: Verify installed application metadata on synthetic registry sources only
+        if: inputs.verification == 'installed-apps'
+        run: |
+          & $env:MSBUILD_EXE tests/InstalledAppsTests.vcxproj /t:Build /m /nologo /p:Configuration=Release /p:Platform=x64 /p:WindowsTargetPlatformVersion=10.0.26100.0 /fl '/flp:logfile=artifacts/records/installed-apps-tests-build.log;verbosity=normal'
+          if ($LASTEXITCODE -ne 0) { throw 'Installed application test build failed.' }
+          & intermediate/installed-apps-tests/InstalledAppsTests.exe | Set-Content artifacts/records/installed-apps-core.json -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic installed application regression failed.' }
 
       - name: Verify official cache cleanup on isolated synthetic caches
         if: inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache' || inputs.verification == 'cleanup-scope'
@@ -111,11 +119,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Isolated official NuGet HTTP regression failed.' }
 
       - name: Verify scan policy and measure synthetic workloads
-        if: inputs.verification == 'space-recheck' || inputs.verification == 'full' || inputs.verification == 'windows-cleanup' || inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache' || inputs.verification == 'cleanup-scope'
+        if: inputs.verification == 'installed-apps' || inputs.verification == 'space-recheck' || inputs.verification == 'full' || inputs.verification == 'windows-cleanup' || inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache' || inputs.verification == 'cleanup-scope'
         run: |
           $reportRoot = Join-Path $env:RUNNER_TEMP 'scan-policy-results'
           # Keep fixtures; only official cache suites clear their own isolated cache fixtures via the official command.
           $scenarios = switch ('${{ inputs.verification }}') {
+            'installed-apps' { 'apps.inventory,apps.inventory.zh,space.recheck,space.recheck.zh' }
             'space-recheck' { 'space.recheck,space.recheck.zh' }
             'cleanup-scope' { 'interaction.delete.0,interaction.dedup-groups' }
             'windows-cleanup' { 'cleanup.windows,cleanup.windows.zh' }
@@ -131,8 +140,8 @@ jobs:
             $report.Results | Select-Object Id,Status,Checks,Seconds,Notes |
               ConvertTo-Json -Depth 8 | Set-Content artifacts/records/scan-policy.json -Encoding utf8
             # Only synthetic runner UI is copied; never upload raw reports or local screenshots.
-            foreach ($case in $report.Results | Where-Object { $_.Id -in @('space.recheck', 'space.recheck.zh', 'cleanup.preview', 'cleanup.preview.zh', 'cleanup.windows', 'cleanup.windows.zh', 'cleanup.nuget', 'cleanup.nuget.zh', 'cleanup.pip', 'cleanup.pip.zh', 'cleanup.npm', 'cleanup.npm.zh') }) {
-              foreach ($name in @('space-recheck','cleanup-preview','nuget-http-scope','nuget-http-result','pip-cache-scope','pip-cache-result','npm-cache-scope','npm-cache-result')) {
+            foreach ($case in $report.Results | Where-Object { $_.Id -in @('apps.inventory', 'apps.inventory.zh', 'space.recheck', 'space.recheck.zh', 'cleanup.preview', 'cleanup.preview.zh', 'cleanup.windows', 'cleanup.windows.zh', 'cleanup.nuget', 'cleanup.nuget.zh', 'cleanup.pip', 'cleanup.pip.zh', 'cleanup.npm', 'cleanup.npm.zh') }) {
+              foreach ($name in @('installed-apps','space-recheck','cleanup-preview','nuget-http-scope','nuget-http-result','pip-cache-scope','pip-cache-result','npm-cache-scope','npm-cache-result')) {
                 $screenshot = Join-Path $case.Artifacts ($name + '.png')
                 if (Test-Path -LiteralPath $screenshot) {
                   Copy-Item -LiteralPath $screenshot -Destination (Join-Path artifacts/records ($case.Id + '.' + $name + '.png'))

@@ -489,13 +489,26 @@
 #define IDC_SR_RESULT                   1247
 #define IDC_SR_STATUS                   1248
 
+#define ID_TOOLS_INSTALLED_APPS         32971
+#define IDD_INSTALLED_APPS              128
+#define IDC_IA_NOTICE                   1249
+#define IDC_IA_SEARCH                   1250
+#define IDC_IA_SORT                     1251
+#define IDC_IA_LIST                     1252
+#define IDC_IA_DETAILS                  1253
+#define IDC_IA_STATUS                   1254
+#define IDC_IA_REFRESH                  1255
+#define IDC_IA_STOP                     1256
+#define IDC_IA_LOCATE                   1257
+#define IDC_IA_WINDOWS                  1258
+
 // Next default values for new objects
 //
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
-#define _APS_NEXT_RESOURCE_VALUE        128
-#define _APS_NEXT_COMMAND_VALUE         32971
-#define _APS_NEXT_CONTROL_VALUE         1249
+#define _APS_NEXT_RESOURCE_VALUE        129
+#define _APS_NEXT_COMMAND_VALUE         32972
+#define _APS_NEXT_CONTROL_VALUE         1259
 #define _APS_NEXT_SYMED_VALUE           127
 #endif
 #endif

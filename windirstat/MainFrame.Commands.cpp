@@ -16,8 +16,14 @@
 #include "ProgressDlg.h"
 #include "RecoveryDlg.h"
 #include "CleanupPreviewDlg.h"
+#include "InstalledAppsDlg.h"
 
 static const int UdcMenuTag = 0;
+
+void CMainFrame::OnInstalledApps()
+{
+    CInstalledAppsDlg(this).ShowModal();
+}
 
 void CMainFrame::OnCleanupPreview()
 {

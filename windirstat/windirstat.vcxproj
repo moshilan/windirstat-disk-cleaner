@@ -229,6 +229,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClInclude Include="resource.h" />
     <ClInclude Include="Cleanup\CleanupPreview.h" />
     <ClInclude Include="Cleanup\SpaceRecheck.h" />
+    <ClInclude Include="Space\InstalledApps.h" />
+    <ClInclude Include="Dialogs\InstalledAppsDlg.h" />
     <ClInclude Include="Dialogs\SpaceRecheckDlg.h" />
     <ClInclude Include="Cleanup\CleanupPlan.h" />
     <ClInclude Include="Cleanup\NuGetHttpCache.h" />
@@ -265,6 +267,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClCompile Include="Dialogs\CleanupPlanDlg.cpp" />
     <ClCompile Include="Dialogs\CleanupPreviewDlg.cpp" />
     <ClCompile Include="Cleanup\SpaceRecheck.cpp" />
+    <ClCompile Include="Space\InstalledApps.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Dialogs\InstalledAppsDlg.cpp" />
     <ClCompile Include="Dialogs\SpaceRecheckDlg.cpp" />
     <ClCompile Include="Controls\ExtensionListControl.cpp" />
     <ClCompile Include="Controls\FileDupeControl.cpp" />

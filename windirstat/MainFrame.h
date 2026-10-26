@@ -312,6 +312,7 @@ protected:
     void OnWatcherClear();
     void OnUpdateWatcherClear(CCmdUI* pCmdUI);
     void OnCleanupPreview();
+    void OnInstalledApps();
     void OnToolsRecovery();
     void OnUpdateToolsRecovery(CCmdUI* pCmdUI) const;
     void OnToolsPermissions() const;
@@ -462,6 +463,7 @@ inline std::span<const RouteEntry> CMainFrame::Routes()
         Route::Command<&OnWatcherClear>(ID_WATCHER_CLEAR),
         Route::Update<&OnUpdateWatcherClear>(ID_WATCHER_CLEAR),
         Route::Command<&OnCleanupPreview>(ID_CLEANUP_PREVIEW),
+        Route::Command<&OnInstalledApps>(ID_TOOLS_INSTALLED_APPS),
         Route::Command<&OnToolsRecovery>(ID_TOOLS_RECOVERY),
         Route::Update<&OnUpdateToolsRecovery>(ID_TOOLS_RECOVERY),
         Route::Command<&OnToolsPermissions>(ID_TOOLS_PERMISSIONS),
