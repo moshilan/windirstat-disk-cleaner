@@ -1,4 +1,4 @@
-# Synthetic application-registration fixtures only. No real inventory, uninstall, folder scan or external shell launch.
+﻿# Synthetic application-registration fixtures only. No real inventory, uninstall, folder scan or external shell launch.
 function New-InstalledAppRecord {
     param([string] $Root, [string] $Source, [string] $Id, [string] $Name, [string] $Location = '',
         [string] $Publisher = 'Fixture Vendor', [string] $Version = '1.0', [int] $SizeKiB = 0, [switch] $BadSize)
@@ -103,8 +103,10 @@ function Test-InstalledApps {
     Assert-Equal ([NativeListViewHelper]::GetItemCount($list)) 0 'Uninstall commands never become searchable application metadata'
     Set-InstalledAppsSearch $dialog ''
     Invoke-CleanupButton $dialog 'IDC_IA_SORT'
-    Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root 'installed-apps.png')
     $bounds = [TestDesktop]::Rectangle($dialog)
+    $work = [System.Windows.Forms.Screen]::FromHandle($dialog).WorkingArea
+    Assert-True ($bounds[0] -ge $work.Left -and $bounds[1] -ge $work.Top -and $bounds[2] -le $work.Right -and $bounds[3] -le $work.Bottom) 'The complete application window fits the desktop working area'
+    Save-Frame ([TestDesktop]::Capture($dialog)) (Join-Path $Context.Root 'installed-apps.png')
     foreach ($id in 'IDC_IA_REFRESH','IDC_IA_STOP','IDC_IA_LOCATE','IDC_IA_WINDOWS') {
         $button = [TestDesktop]::Rectangle((Get-DialogControl $dialog $id))
         Assert-True ($button[0] -ge $bounds[0] -and $button[2] -le $bounds[2] -and $button[3] -lt $bounds[3]) 'Actions remain within the dialog frame'
