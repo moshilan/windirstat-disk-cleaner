@@ -91,6 +91,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Installed application test build failed.' }
           & intermediate/installed-apps-tests/InstalledAppsTests.exe | Set-Content artifacts/records/installed-apps-core.json -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw 'Synthetic installed application regression failed.' }
+          ./tests/Test-InstalledAppsFolder.ps1 -Executable intermediate/installed-apps-tests/InstalledAppsTests.exe -OutputDirectory artifacts/records
 
       - name: Verify official cache cleanup on isolated synthetic caches
         if: inputs.verification == 'nuget-http' || inputs.verification == 'pip-cache' || inputs.verification == 'npm-cache' || inputs.verification == 'cleanup-scope'

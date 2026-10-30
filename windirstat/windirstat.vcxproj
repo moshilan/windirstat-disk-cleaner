@@ -230,6 +230,7 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClInclude Include="Cleanup\CleanupPreview.h" />
     <ClInclude Include="Cleanup\SpaceRecheck.h" />
     <ClInclude Include="Space\InstalledApps.h" />
+    <ClInclude Include="Space\InstallDirectory.h" />
     <ClInclude Include="Dialogs\InstalledAppsDlg.h" />
     <ClInclude Include="Dialogs\SpaceRecheckDlg.h" />
     <ClInclude Include="Cleanup\CleanupPlan.h" />
@@ -267,6 +268,7 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClCompile Include="Dialogs\CleanupPlanDlg.cpp" />
     <ClCompile Include="Dialogs\CleanupPreviewDlg.cpp" />
     <ClCompile Include="Cleanup\SpaceRecheck.cpp" />
+    <ClCompile Include="Space\InstallDirectory.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Space\InstalledApps.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Dialogs\InstalledAppsDlg.cpp" />
     <ClCompile Include="Dialogs\SpaceRecheckDlg.cpp" />

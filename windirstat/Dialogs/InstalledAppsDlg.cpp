@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "pch.h"
 #include "InstalledAppsDlg.h"
-#include "Cleanup/CleanupPreview.h"
-#include "Finder.h"
+#include "Space/InstallDirectory.h"
 
 namespace
 {
@@ -192,20 +191,25 @@ void CInstalledAppsDlg::OnDisplay(NMHDR* header, LRESULT* result)
 void CInstalledAppsDlg::OnLocate()
 {
     const auto* item = Selected();
-    if (m_busy || !item || !LocalDirectoryText(item->installLocation)) return;
-    std::wstring path, error;
-    const auto driveType = GetDriveTypeW(item->installLocation.substr(0, 3).c_str());
-    if ((driveType != DRIVE_FIXED && driveType != DRIVE_REMOVABLE) ||
-        !Cleanup::NormalizeDirectory(item->installLocation, path, error) || !Cleanup::HasSafeAncestors(path))
+    if (m_busy) return;
+    if (!item || !LocalDirectoryText(item->installLocation))
     { SetText(IDC_IA_STATUS, Localization::Lookup(IDS_IA_LOCATION_FAILED)); return; }
-    const auto attributes = GetFileAttributesW(Finder::MakeLongPathCompatible(path).c_str());
-    if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
-    { SetText(IDC_IA_STATUS, Localization::Lookup(IDS_IA_LOCATION_FAILED)); return; }
-    if (m_fixture) { SetText(IDC_IA_STATUS, Localization::Lookup(IDS_IA_LOCATE_TEST)); return; }
-    const auto pidl = ILCreateFromPathW(path.c_str());
-    const HRESULT opened = pidl ? SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0) : E_INVALIDARG;
-    CoTaskMemFree(pidl);
-    SetText(IDC_IA_STATUS, Localization::Lookup(SUCCEEDED(opened) ? IDS_IA_LOCATED : IDS_IA_LOCATION_FAILED));
+    std::wstring capturedTarget;
+    Space::InstallDirectory::Launch capture;
+    if (m_fixture) capture = [&](SHELLEXECUTEINFOW* request) -> BOOL
+    {
+        wchar_t path[MAX_PATH]{};
+        if (!request->lpIDList || !SHGetPathFromIDListW(static_cast<PCIDLIST_ABSOLUTE>(request->lpIDList), path))
+        { SetLastError(ERROR_INVALID_DATA); return FALSE; }
+        capturedTarget = path;
+        return TRUE;
+    };
+    const auto opened = Space::InstallDirectory::Open(item->installLocation, Handle(), capture);
+    SetText(IDC_IA_STATUS, Localization::Lookup(FAILED(opened) ? IDS_IA_LOCATION_FAILED :
+        m_fixture ? IDS_IA_LOCATE_TEST : IDS_IA_LOCATED));
+    if (SUCCEEDED(opened) && m_fixture)
+        SetText(IDC_IA_DETAILS, GetDlgItem(IDC_IA_DETAILS).GetText() + L"\r\n" +
+            Localization::Format(IDS_IA_SHELL_TARGET, capturedTarget));
 }
 void CInstalledAppsDlg::OnWindows()
 {

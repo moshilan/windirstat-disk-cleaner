@@ -72,7 +72,9 @@ function Test-InstalledApps {
     $packageRow = [array]::IndexOf($names, 'Packaged Tool')
     Assert-True ($sizes[$packageRow] -match 'Unknown|未知') 'MSIX size is not invented from a synthetic registry estimate'
     $notice = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_IA_NOTICE'))
-    Assert-True ($notice -match 'overlap|重叠') 'Overlapping records are not added to a misleading total'
+    Assert-True ($notice -match 'Shared files|共享') 'Overlapping records are not added to a misleading total'
+    Assert-True ($notice -match 'exclusive|独占') 'Registration estimate is distinguished from exclusive disk usage'
+    Assert-True ($notice -match 'uninstalling|卸载后') 'Registration estimate is not promised uninstall savings'
     Assert-True ($notice -match 'caches|缓存') 'Application registration is distinguished from user data and caches'
     Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_IA_STATUS')) -match 'incomplete|不完整') 'Malformed source visibly marks inventory as partial'
     Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $dialog 'IDC_IA_LOCATE'))) 'No directory action without an explicit selected record'
@@ -86,7 +88,9 @@ function Test-InstalledApps {
     Wait-Until { [TestDesktop]::IsWindowEnabled((Get-DialogControl $dialog 'IDC_IA_LOCATE')) } 'Known local install path enables locate' | Out-Null
     Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_IA_DETAILS')).Contains($directory)) 'Full reported installation path is visible outside clipped columns'
     Invoke-CleanupButton $dialog 'IDC_IA_LOCATE'
-    Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_IA_STATUS')) -match 'simulated|模拟') 'Locate validates only the synthetic directory and simulates Explorer'
+    Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_IA_STATUS')) -match 'simulated|模拟') 'Directory opening captures the real explore request and simulates its dispatch'
+    $captured = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_IA_DETAILS'))
+    Assert-True ($captured -match ('Shell.*explore.*' + [regex]::Escape($directory))) 'The captured Shell PIDL points to the exact selected installation directory'
     Invoke-CleanupButton $dialog 'IDC_IA_WINDOWS'
     Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_IA_STATUS')) -match 'simulated|模拟') 'Official uninstall page is simulated and never starts an uninstaller'
     Set-InstalledAppsSearch $dialog '3.2'
@@ -98,7 +102,7 @@ function Test-InstalledApps {
     Set-InstalledAppsSearch $dialog 'Missing Folder'
     [void][NativeListViewHelper]::SelectSingleItem($list, 0)
     Invoke-CleanupButton $dialog 'IDC_IA_LOCATE'
-    Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_IA_STATUS')) -match 'missing|缺失') 'A stale registered directory fails explicitly without fallback'
+    Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_IA_STATUS')) -match 'missing|不存在') 'A stale registered directory fails explicitly without fallback'
     Set-InstalledAppsSearch $dialog 'NEVER_EXECUTE'
     Assert-Equal ([NativeListViewHelper]::GetItemCount($list)) 0 'Uninstall commands never become searchable application metadata'
     Set-InstalledAppsSearch $dialog ''

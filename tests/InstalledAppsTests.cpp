@@ -1,9 +1,14 @@
 ﻿// Synthetic installed-application metadata only. Never enumerate a real Uninstall key or MSIX inventory.
 #include <windows.h>
 #include <objbase.h>
+#include <shlobj.h>
+#include <sddl.h>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <stdexcept>
 #include "Space/InstalledApps.h"
+#include "Space/InstallDirectory.h"
 namespace IA = Space::InstalledApps;
 static unsigned checks = 0;
 static void Check(const bool ok, const char* message) { ++checks; if (!ok) throw std::runtime_error(message); }
@@ -38,10 +43,94 @@ static void App(const std::wstring& root, const std::wstring& source, const std:
     if (malformed) String(key.value, L"EstimatedSize", L"999999");
     else Number(key.value, L"EstimatedSize", size);
 }
-int wmain()
+namespace fs = std::filesystem;
+static fs::path DirectoryFixture()
+{
+    wchar_t temp[MAX_PATH]{}, text[40]{};
+    const auto tempLength = GetTempPathW(MAX_PATH, temp);
+    Check(tempLength > 0 && tempLength < MAX_PATH, "Resolve a complete synthetic test location");
+    GUID id{};
+    Check(SUCCEEDED(CoCreateGuid(&id)), "Generate folder fixture identity");
+    StringFromGUID2(id, text, 40);
+    const auto root = fs::path(temp) / (L"WinDirStatInstalledAppsShell-" + std::wstring(text + 1, 36) + L" & space[1]");
+    Check(root.is_absolute() && !fs::exists(root), "Refuse a relative or reused directory fixture");
+    fs::create_directories(root / L"Copilot" / L"Application");
+    fs::create_directories(root / L"Edge" / L"Application");
+    return root;
+}
+static void DirectoryRequests()
+{
+    const auto root = DirectoryFixture();
+    const auto target = root / L"Copilot" / L"Application";
+    unsigned calls = 0;
+    const Space::InstallDirectory::Launch capture = [&](SHELLEXECUTEINFOW* request) -> BOOL
+    {
+        ++calls;
+        Check(request->cbSize == sizeof(*request), "Shell structure is complete");
+        Check((request->fMask & SEE_MASK_IDLIST) != 0 && (request->fMask & SEE_MASK_FLAG_NO_UI) != 0,
+            "Shell uses explicit folder identity without error popups");
+        Check(std::wstring(request->lpVerb) == L"explore", "Explore enters the target instead of selecting it in a parent");
+        Check(!request->lpFile && !request->lpParameters && !request->lpDirectory, "No executable, arguments or fallback directory");
+        wchar_t actual[MAX_PATH]{};
+        Check(SHGetPathFromIDListW(static_cast<PCIDLIST_ABSOLUTE>(request->lpIDList), actual) != FALSE,
+            "Shell PIDL resolves to a filesystem target");
+        Check(_wcsicmp(actual, target.c_str()) == 0, "Shell receives Copilot Application itself, not Edge or its parent");
+        return TRUE;
+    };
+    Check(SUCCEEDED(Space::InstallDirectory::Open(target.wstring(), nullptr, capture)), "Accept the synthetic installation directory");
+    Check(calls == 1, "Exactly one open request, without fallback");
+    const auto sentinel = root / L"not-a-directory.exe";
+    std::ofstream(sentinel) << "Synthetic data only; never execute";
+    const std::vector<std::wstring> invalid{ L"", L"relative", L"C:\\", L"ms-settings:appsfeatures", L"\\\\server\\share",
+        (root / L"missing").wstring(), sentinel.wstring(), target.wstring() + L"\\..", target.wstring() + L"\n" };
+    for (const auto& path : invalid)
+    {
+        Check(FAILED(Space::InstallDirectory::Open(path, nullptr, capture)), "Invalid, missing or file target is refused");
+        Check(calls == 1, "Rejected path never launches another directory or application");
+    }
+    unsigned failedLaunches = 0;
+    const auto failure = Space::InstallDirectory::Open(target.wstring(), nullptr, [&](SHELLEXECUTEINFOW*) -> BOOL
+    { ++failedLaunches; SetLastError(ERROR_ACCESS_DENIED); return FALSE; });
+    Check(FAILED(failure) && failedLaunches == 1, "Shell failure is reported and never retried with another target");
+    DWORD bytes = 0;
+    GetFileSecurityW(target.c_str(), DACL_SECURITY_INFORMATION, nullptr, 0, &bytes);
+    std::vector<BYTE> previous(bytes);
+    Check(bytes != 0 && GetFileSecurityW(target.c_str(), DACL_SECURITY_INFORMATION,
+        previous.data(), bytes, &bytes), "Save only our synthetic directory permissions");
+    PSECURITY_DESCRIPTOR denied = nullptr;
+    Check(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(D;;0x1;;;WD)(A;;FA;;;WD)",
+        SDDL_REVISION_1, &denied, nullptr), "Construct synthetic list-access denial");
+    const bool changed = SetFileSecurityW(target.c_str(), DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, denied) != FALSE;
+    LocalFree(denied);
+    Check(changed, "Apply denial only to the explicitly created test directory");
+    const auto inaccessible = Space::InstallDirectory::Open(target.wstring(), nullptr, capture);
+    const bool restored = SetFileSecurityW(target.c_str(), DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION, previous.data()) != FALSE;
+    Check(restored, "Restore synthetic directory permissions");
+    Check(FAILED(inaccessible) && calls == 1, "Inaccessible directory is refused before Shell with no fallback");
+}
+static int ShellFixture()
+{
+    wchar_t cloud[8]{};
+    Check(GetEnvironmentVariableW(L"GITHUB_ACTIONS", cloud, 8) != 0 && std::wstring(cloud) == L"true",
+        "Actual Explorer verification is cloud-only");
+    const auto root = DirectoryFixture();
+    const auto target = root / L"Copilot" / L"Application";
+    Check(SUCCEEDED(Space::InstallDirectory::Open(target.wstring(), nullptr)), "Open only a self-created synthetic directory");
+    std::wcout << L"{\"target\":\"";
+    for (const auto ch : target.wstring()) { if (ch == L'\\') std::wcout << L'\\'; std::wcout << ch; }
+    std::wcout << L"\"}\n";
+    return 0;
+}
+int wmain(int argc, wchar_t** argv)
 {
     try
     {
+        const auto com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        Check(SUCCEEDED(com), "Initialize COM for folder identity operations");
+        struct ComThread { ~ComThread() { CoUninitialize(); } } comThread;
+        if (argc == 2 && std::wstring(argv[1]) == L"--shell-fixture") return ShellFixture();
+        Check(argc == 1, "Only the explicit synthetic Shell mode is supported");
+        DirectoryRequests();
         IA::Record record{ IA::Source::Machine64, L"key", L"Synthetic App", L"Publisher", L"2", L"C:\\SyntheticOnly", 2048 };
         const auto converted = IA::Convert(record);
         Check(converted && converted->estimatedBytes == 2097152, "Registry KiB converted to bytes without measurement");

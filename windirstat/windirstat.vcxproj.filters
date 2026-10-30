@@ -233,6 +233,7 @@
     <ClInclude Include="Pages\PagePrompts.h">
       <Filter>Header Files\User Interface\Pages</Filter>
     </ClInclude>
+    <ClInclude Include="Space\InstallDirectory.h"><Filter>Header Files\Core</Filter></ClInclude>
     <ClInclude Include="Space\InstalledApps.h"><Filter>Header Files\Core</Filter></ClInclude>
     <ClInclude Include="Dialogs\InstalledAppsDlg.h"><Filter>Header Files\User Interface\Dialogs</Filter></ClInclude>
     <ClInclude Include="Cleanup\SpaceRecheck.h"><Filter>Header Files\Core</Filter></ClInclude>
@@ -486,6 +487,7 @@
     <ClCompile Include="Controls\FileDupeControl.cpp">
       <Filter>Source Files\User Interface\Controls</Filter>
     </ClCompile>
+    <ClCompile Include="Space\InstallDirectory.cpp"><Filter>Source Files\Core</Filter></ClCompile>
     <ClCompile Include="Space\InstalledApps.cpp"><Filter>Source Files\Core</Filter></ClCompile>
     <ClCompile Include="Dialogs\InstalledAppsDlg.cpp"><Filter>Source Files\User Interface\Dialogs</Filter></ClCompile>
     <ClCompile Include="Cleanup\SpaceRecheck.cpp"><Filter>Source Files\Core</Filter></ClCompile>
