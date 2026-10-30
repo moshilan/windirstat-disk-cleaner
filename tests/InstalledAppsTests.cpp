@@ -56,7 +56,10 @@ static fs::path DirectoryFixture()
     Check(root.is_absolute() && !fs::exists(root), "Refuse a relative or reused directory fixture");
     fs::create_directories(root / L"Copilot" / L"Application");
     fs::create_directories(root / L"Edge" / L"Application");
-    return root;
+    wchar_t canonical[32768]{};
+    const auto length = GetLongPathNameW(root.c_str(), canonical, static_cast<DWORD>(std::size(canonical)));
+    Check(length > 0 && length < std::size(canonical), "Resolve the fixture's exact long path before PIDL comparison");
+    return fs::path(canonical);
 }
 static void DirectoryRequests()
 {
@@ -74,6 +77,8 @@ static void DirectoryRequests()
         wchar_t actual[MAX_PATH]{};
         Check(SHGetPathFromIDListW(static_cast<PCIDLIST_ABSOLUTE>(request->lpIDList), actual) != FALSE,
             "Shell PIDL resolves to a filesystem target");
+        if (_wcsicmp(actual, target.c_str()) != 0)
+            std::wcerr << L"Expected directory: " << target.c_str() << L"; Shell PIDL directory: " << actual << L'\n';
         Check(_wcsicmp(actual, target.c_str()) == 0, "Shell receives Copilot Application itself, not Edge or its parent");
         return TRUE;
     };
