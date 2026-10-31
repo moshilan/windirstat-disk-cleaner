@@ -235,6 +235,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClInclude Include="Dialogs\SpaceRecheckDlg.h" />
     <ClInclude Include="Cleanup\CleanupPlan.h" />
     <ClInclude Include="Cleanup\NuGetHttpCache.h" />
+    <ClInclude Include="Cleanup\BleachBit.h" />
+    <ClInclude Include="Dialogs\BleachBitDlg.h" />
     <ClInclude Include="Cleanup\RecycleBinScope.h" />
     <ClInclude Include="Dialogs\NuGetHttpCacheDlg.h" />
     <ClInclude Include="Dialogs\CleanupPlanDlg.h" />
@@ -265,6 +267,8 @@ POWERSHELL.EXE -NoLogo -ExecutionPolicy Unrestricted -NoProfile -File "$(Project
     <ClCompile Include="Cleanup\CleanupPlan.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Cleanup\NuGetHttpCache.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="Dialogs\NuGetHttpCacheDlg.cpp" />
+    <ClCompile Include="Cleanup\BleachBit.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
+    <ClCompile Include="Dialogs\BleachBitDlg.cpp" />
     <ClCompile Include="Dialogs\CleanupPlanDlg.cpp" />
     <ClCompile Include="Dialogs\CleanupPreviewDlg.cpp" />
     <ClCompile Include="Cleanup\SpaceRecheck.cpp" />

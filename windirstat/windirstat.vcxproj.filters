@@ -241,6 +241,8 @@
     <ClInclude Include="Cleanup\CleanupPreview.h"><Filter>Header Files\Core</Filter></ClInclude>
     <ClInclude Include="Cleanup\CleanupPlan.h"><Filter>Header Files\Core</Filter></ClInclude>
     <ClInclude Include="Cleanup\NuGetHttpCache.h"><Filter>Header Files\Core</Filter></ClInclude>
+    <ClInclude Include="Cleanup\BleachBit.h"><Filter>Header Files\Core</Filter></ClInclude>
+    <ClInclude Include="Dialogs\BleachBitDlg.h"><Filter>Header Files\User Interface\Dialogs</Filter></ClInclude>
     <ClInclude Include="Cleanup\RecycleBinScope.h"><Filter>Header Files\Core</Filter></ClInclude>
     <ClInclude Include="Dialogs\NuGetHttpCacheDlg.h"><Filter>Header Files\User Interface\Dialogs</Filter></ClInclude>
     <ClInclude Include="Dialogs\CleanupPlanDlg.h"><Filter>Header Files\User Interface\Dialogs</Filter></ClInclude>
@@ -496,6 +498,8 @@
     <ClCompile Include="Cleanup\CleanupPlan.cpp"><Filter>Source Files\Core</Filter></ClCompile>
     <ClCompile Include="Cleanup\NuGetHttpCache.cpp"><Filter>Source Files\Core</Filter></ClCompile>
     <ClCompile Include="Dialogs\NuGetHttpCacheDlg.cpp"><Filter>Source Files\User Interface\Dialogs</Filter></ClCompile>
+    <ClCompile Include="Cleanup\BleachBit.cpp"><Filter>Source Files\Core</Filter></ClCompile>
+    <ClCompile Include="Dialogs\BleachBitDlg.cpp"><Filter>Source Files\User Interface\Dialogs</Filter></ClCompile>
     <ClCompile Include="Dialogs\CleanupPlanDlg.cpp"><Filter>Source Files\User Interface\Dialogs</Filter></ClCompile>
     <ClCompile Include="Dialogs\CleanupPreviewDlg.cpp"><Filter>Source Files\User Interface\Dialogs</Filter></ClCompile>
     <ClCompile Include="Controls\ExtensionListControl.cpp">

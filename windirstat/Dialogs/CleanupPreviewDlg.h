@@ -25,6 +25,7 @@ private:
     void OnNuGetHttp();
     void OnPipCache();
     void OnNpmCache();
+    void OnBleachBit();
     void SelectOfficialEnvironment(Cleanup::NuGetHttp::Provider provider);
     void OpenOfficialCache(std::wstring tool = {}, Cleanup::NuGetHttp::Provider provider = Cleanup::NuGetHttp::Provider::NuGetHttp);
     void OpenWindowsCleanup(bool recommendations);
@@ -110,6 +111,7 @@ inline std::span<const RouteEntry> CCleanupPreviewDlg::Routes()
         Route::Control<&OnNuGetHttp>(BN_CLICKED, IDC_CP_NUGET),
         Route::Control<&OnPipCache>(BN_CLICKED, IDC_CP_PIP),
         Route::Control<&OnNpmCache>(BN_CLICKED, IDC_CP_NPM),
+        Route::Control<&OnBleachBit>(BN_CLICKED, IDC_CP_BLEACHBIT),
         Route::Control<&OnStop>(BN_CLICKED, IDC_CP_CANCEL),
         Route::Control<&OnSelectAll>(BN_CLICKED, IDC_CP_SELECT_ALL),
         Route::Control<&OnSelectNone>(BN_CLICKED, IDC_CP_SELECT_NONE),

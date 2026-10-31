@@ -1,0 +1,8 @@
+{
+  "version": "6.0.6",
+  "source_commit": "5dad07382af9d1ad0f713ae5734c24f4d8b82efc",
+  "url": "https://github.com/bleachbit/bleachbit/releases/download/v6.0.6/BleachBit-6.0.6-portable.zip",
+  "bytes": 20402357,
+  "sha256": "285a53c01f95cf859250c1b612f27c2ff1247c5af53eb8e8c6744b374f1ed19e",
+  "purpose": "Explicit cloud-only synthetic integration tests. Never bundled with WinDirStat or installed on the user computer."
+}

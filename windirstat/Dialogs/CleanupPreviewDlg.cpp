@@ -6,6 +6,7 @@
 #include "CleanupPlanDlg.h"
 #include "NuGetHttpCacheDlg.h"
 #include "SpaceRecheckDlg.h"
+#include "BleachBitDlg.h"
 
 namespace
 {
@@ -265,6 +266,7 @@ bool CCleanupPreviewDlg::OnInitDialog()
     m_layout.AddControl(IDC_CP_CANCEL, 0, 1, 0, 0);
     m_layout.AddControl(IDC_CP_SELECT_ALL, 0, 1, 0, 0);
     m_layout.AddControl(IDC_CP_SELECT_NONE, 0, 1, 0, 0);
+    m_layout.AddControl(IDC_CP_BLEACHBIT, 0, 1, 0, 0);
     m_layout.AddControl(IDC_CP_SORT_SIZE, 0, 0, 0, 0);
     m_layout.AddControl(IDC_CP_HIDE_ZERO, 0, 0, 0, 0);
     m_layout.AddControl(IDC_CP_PLAN, 1, 0, 0, 0);
@@ -275,7 +277,7 @@ bool CCleanupPreviewDlg::OnInitDialog()
     const auto categories = GetChildWindowRect(m_categories.Handle());
     const auto files = GetChildWindowRect(m_files.Handle());
     const auto details = GetChildWindowRect(GetDlgItem(IDC_CP_DETAILS).Handle());
-    const auto lastButton = GetChildWindowRect(GetDlgItem(IDC_CP_SELECT_NONE).Handle());
+    const auto lastButton = GetChildWindowRect(GetDlgItem(IDC_CP_BLEACHBIT).Handle());
     const auto closeButton = GetChildWindowRect(GetDlgItem(IDCANCEL).Handle());
     m_minimumSize = CSize(lastButton.right + closeButton.Width() + categories.left * 2 + window.Width() - client.Width(),
         window.Height() - categories.Height() - files.Height() - details.Height() + ScaleForDpi(65 + 64 + 32));
@@ -518,7 +520,7 @@ void CCleanupPreviewDlg::SetScanning(const bool scanning)
     for (const auto id : { IDC_CP_CATEGORIES, IDC_CP_EXCLUSIONS, IDC_CP_ADD_EXCLUSION }) GetDlgItem(id).EnableWindow(!scanning && m_optionsValid);
     GetDlgItem(IDC_CP_SCAN).EnableWindow(!scanning && m_optionsValid);
     GetDlgItem(IDC_CP_CANCEL).EnableWindow(scanning);
-    for (const auto id : { IDC_CP_WINDOWS_RECOMMENDATIONS, IDC_CP_WINDOWS_DISK, IDC_CP_NUGET, IDC_CP_PIP, IDC_CP_NPM }) GetDlgItem(id).EnableWindow(!scanning);
+    for (const auto id : { IDC_CP_WINDOWS_RECOMMENDATIONS, IDC_CP_WINDOWS_DISK, IDC_CP_NUGET, IDC_CP_PIP, IDC_CP_NPM, IDC_CP_BLEACHBIT }) GetDlgItem(id).EnableWindow(!scanning);
     GetDlgItem(IDC_CP_PLAN).EnableWindow(!scanning && m_valid && !m_result.incomplete && !m_result.cancelled &&
         !m_result.limitReached && m_result.failures == 0 && std::ranges::any_of(m_selected, [](bool value) { return value; }));
     for (const auto id : { IDC_CP_FILES, IDC_CP_SELECT_ALL, IDC_CP_SELECT_NONE, IDC_CP_SORT_SIZE, IDC_CP_HIDE_ZERO }) GetDlgItem(id).EnableWindow(!scanning && m_valid);
@@ -721,6 +723,21 @@ void CCleanupPreviewDlg::OnPipCache()
 void CCleanupPreviewDlg::OnNpmCache()
 {
     SelectOfficialEnvironment(Cleanup::NuGetHttp::Provider::Npm);
+}
+void CCleanupPreviewDlg::OnBleachBit()
+{
+    if (m_scanning) return;
+    CBleachBitDlg dialog(this, [this]
+    {
+        const auto text = m_exclusions.GetText();
+        return Cleanup::BleachBit::ExclusionPolicy{ !m_exclusionsCorrupt && text == m_savedExclusionsText, text };
+    });
+    dialog.ShowModal();
+    if (dialog.Started())
+    {
+        InvalidatePreview();
+        SetText(IDC_CP_STATUS, Localization::Lookup(IDS_BB_RESCAN));
+    }
 }
 void CCleanupPreviewDlg::SelectOfficialEnvironment(const Cleanup::NuGetHttp::Provider provider)
 {

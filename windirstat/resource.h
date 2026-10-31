@@ -501,6 +501,7 @@
 #define IDC_IA_STOP                     1256
 #define IDC_IA_LOCATE                   1257
 #define IDC_IA_WINDOWS                  1258
+#define IDC_CP_BLEACHBIT                1259
 
 // Next default values for new objects
 //
@@ -508,7 +509,7 @@
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NEXT_RESOURCE_VALUE        129
 #define _APS_NEXT_COMMAND_VALUE         32972
-#define _APS_NEXT_CONTROL_VALUE         1259
+#define _APS_NEXT_CONTROL_VALUE         1260
 #define _APS_NEXT_SYMED_VALUE           127
 #endif
 #endif

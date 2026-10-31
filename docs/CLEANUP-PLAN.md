@@ -113,3 +113,16 @@ AbsoluteControl仅为独立新样本的接口对照，不是Rooted的执行器�
 现有可用替代是Windows清理建议、系统磁盘清理及其空间复查窗口，由用户在Windows中自行选择范围并确认。[微软清理说明](https://support.microsoft.com/en-us/windows/experience/storage-filemanagement/free-up-drive-space-in-windows)也采用Windows自身分类。其范围不等于本预览勾选项，不承诺承接本窗口排除规则，也不提供本计划逐项结果；磁盘可用空间变化仅作观测，不能直接归因于清理。没有新增静默调用、删除回退或自动提权。
 
 因此本轮未打通勾选候选→确认→实际清理→逐项结果→空间复查；已存在的是勾选到只读计划/模拟，以及独立的Windows工具启动与空间观测。构建和合成回归结果另记BUILD-BASELINE.md，不将回归通过表述为真实删除准入通过。
+
+
+## BleachBit外部引擎：用户TEMP类别（开发中，真实验证待完成）
+
+用户另行授权采用成熟外部引擎，原逐候选自研删除继续阻断。本功能不使用原候选勾选或7天规则，只允许BleachBit内置system.tmp，独立界面展示真实预览并默认取消确认；清理时重新枚举整个用户TEMP，包含近期、任意扩展名及新出现文件，不承诺冻结文件快照。
+
+- 仅检测已有完整BleachBit 6.0.6的bleachbit_console.exe，不使用PATH、不下载/安装、不分发其二进制、不移植源码；GPL-3.0-or-later，官方Windows包已带Python等依赖，无须给WinDirStat安装Python。核查源码固定5dad07382af9d1ad0f713ae5734c24f4d8b82efc，见[官方CLI](https://docs.bleachbit.org/doc/command-line-interface/index.html)及[固定源码](https://github.com/bleachbit/bleachbit/tree/5dad07382af9d1ad0f713ae5734c24f4d8b82efc)。其他版本明确不可用，用户需自行准备可信完整安装。
+- 正式只接受实际TEMP等于当前KnownFolder LocalAppData/Temp，固定本地NTFS及安全目录身份；自定义TEMP不静默改路径。Windows/Temp以BleachBit原生folder keep完整保留，引擎枚举时仍可能只读访问。项目排除与用户TEMP自身、父或子重叠、配置不可用或无法可靠解析时整批阻断，确认不覆盖；排除变化要求重新预览。
+- 固定--no-uac --no-load-cleaners --no-check-online-updates --no-first-start，以及--preview/--clean system.tmp；不提供任意参数、preset、通配选项、其他类别、覆写或空闲空间擦除。使用单独会话INI和版本受限的BLEACHBIT_TEST_OPTIONS_DIR，禁shred、扩展规则及更新；不继承用户BleachBit个人配置/keep列表。控制文件保留在清理范围外。
+- 拒绝提升或管理员组启用的进程，因为引擎遇锁32会尝试登记重启删除；不靠--no-uac冒充降权。普通权限失败不重试、不改ACL或所有权、不换自研删除器。引擎可能清除只读属性，确认明确提示。不进入回收站，不支持撤销。安装及其完整依赖必须可信，不宣称子进程为文件系统沙箱。
+- 子进程由无界面Job控制，限制输出、超时和继承句柄；运行期停止可能部分完成，不自动重放。CLI退出0不足以判成功，检查完整英文总结/Errors、清理后再预览并显示原始输出；条目数包括目录。另列TEMP所在卷available空间变化，仅作观测，不把引擎recovered或卷变化认作可归因释放量。已启动后使原预览失效。
+
+测试只允许程序自建标记fixture，同时重定向TEMP、windir和配置，SystemRoot仍供Windows运行时使用。标准Runner测试先创建普通受限primary token并核验实际子令牌，不能回退管理员运行。真实引擎包仅在另有明确下载授权且手动选择bleachbit-temp模式时进入Runner临时目录，固定官方包SHA256，不安装、不进入产品制品；该许可默认关闭。当前仅静态审查/语法检查通过，编译及实际清理结果必须以BUILD-BASELINE最终记录为准，不能把本实现记作已验收。
