@@ -27,6 +27,7 @@ public static class LimitedSyntheticTest
 {
     [StructLayout(LayoutKind.Sequential)] struct SID_AND_ATTRIBUTES { public IntPtr Sid; public uint Attributes; }
     [StructLayout(LayoutKind.Sequential)] struct TOKEN_MANDATORY_LABEL { public SID_AND_ATTRIBUTES Label; }
+    [StructLayout(LayoutKind.Sequential)] struct TOKEN_DEFAULT_DACL { public IntPtr DefaultDacl; }
     [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct STARTUPINFO {
         public uint cb; public string reserved, desktop, title;
         public uint x,y,xSize,ySize,xChars,yChars,fill,flags;
@@ -48,7 +49,11 @@ public static class LimitedSyntheticTest
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int info,IntPtr data,uint size,out uint needed);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool CreateRestrictedToken(IntPtr token,uint flags,uint disabledCount,ref SID_AND_ATTRIBUTES disabled,uint privilegeCount,IntPtr privileges,uint restrictedCount,IntPtr restricted,out IntPtr result);
     [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSidToSid(string sid,out IntPtr result);
+    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertSidToStringSid(IntPtr sid,out IntPtr result);
+    [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool ConvertStringSecurityDescriptorToSecurityDescriptor(string descriptor,uint revision,out IntPtr result,out uint size);
+    [DllImport("advapi32.dll", SetLastError=true)] static extern bool GetSecurityDescriptorDacl(IntPtr descriptor,[MarshalAs(UnmanagedType.Bool)] out bool present,out IntPtr dacl,[MarshalAs(UnmanagedType.Bool)] out bool defaulted);
     [DllImport("advapi32.dll", SetLastError=true)] static extern bool SetTokenInformation(IntPtr token,int info,ref TOKEN_MANDATORY_LABEL data,uint size);
+    [DllImport("advapi32.dll", EntryPoint="SetTokenInformation", SetLastError=true)] static extern bool SetTokenDefaultDacl(IntPtr token,int info,ref TOKEN_DEFAULT_DACL data,uint size);
     [DllImport("advapi32.dll")] static extern uint GetLengthSid(IntPtr sid);
     [DllImport("advapi32.dll")] static extern bool EqualSid(IntPtr first,IntPtr second);
     [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
@@ -75,6 +80,31 @@ public static class LimitedSyntheticTest
             return false;
         } finally { Marshal.FreeHGlobal(data); }
     }
+    static void SetOrdinaryObjectDacl(IntPtr current,IntPtr restricted) {
+        uint size; GetTokenInformation(current,1,IntPtr.Zero,0,out size);
+        if(size==0) throw new InvalidOperationException("Missing current token user.");
+        IntPtr user=Marshal.AllocHGlobal((int)size),text=IntPtr.Zero,descriptor=IntPtr.Zero;
+        try {
+            Require(GetTokenInformation(current,1,user,size,out size),"Read current token user SID");
+            Require(ConvertSidToStringSid(Marshal.ReadIntPtr(user),out text),"Format current token user SID");
+            string sid=Marshal.PtrToStringUni(text);
+            if(String.IsNullOrEmpty(sid)) throw new InvalidOperationException("Missing current user SID text.");
+            uint descriptorSize;
+            Require(ConvertStringSecurityDescriptorToSecurityDescriptor("D:(A;;GA;;;"+sid+")(A;;GA;;;SY)",1,out descriptor,out descriptorSize),"Build ordinary test object DACL");
+            bool present,defaulted; IntPtr dacl;
+            Require(GetSecurityDescriptorDacl(descriptor,out present,out dacl,out defaulted),"Read ordinary test object DACL");
+            if(!present||dacl==IntPtr.Zero) throw new InvalidOperationException("Refusing an absent or unrestricted object DACL.");
+            TOKEN_DEFAULT_DACL value=new TOKEN_DEFAULT_DACL { DefaultDacl=dacl };
+            // Only the new restricted token is changed. Its former inherited
+            // Administrators grant is deny-only and cannot open its own pipes.
+            // No existing file or directory ACL is modified.
+            Require(SetTokenDefaultDacl(restricted,6,ref value,(uint)Marshal.SizeOf(typeof(TOKEN_DEFAULT_DACL))),"Set restricted test token default DACL");
+        } finally {
+            if(descriptor!=IntPtr.Zero) LocalFree(descriptor);
+            if(text!=IntPtr.Zero) LocalFree(text);
+            Marshal.FreeHGlobal(user);
+        }
+    }
     static string Quote(string value) {
         if(value==null) throw new ArgumentNullException("argument");
         StringBuilder result=new StringBuilder("\""); int slashes=0;
@@ -100,6 +130,7 @@ public static class LimitedSyntheticTest
                 Require(ConvertStringSidToSid("S-1-16-8192",out medium),"Create medium integrity SID");
                 TOKEN_MANDATORY_LABEL label=new TOKEN_MANDATORY_LABEL { Label=new SID_AND_ATTRIBUTES { Sid=medium,Attributes=0x20 } };
                 Require(SetTokenInformation(token,25,ref label,(uint)Marshal.SizeOf(typeof(TOKEN_MANDATORY_LABEL))+GetLengthSid(medium)),"Set test token medium integrity");
+                SetOrdinaryObjectDacl(current,restricted);
             }
             if(Elevated(token)||AdminEnabled(token,admin)) throw new InvalidOperationException("Refusing an elevated synthetic test process.");
             StringBuilder command=new StringBuilder(Quote(executable));
