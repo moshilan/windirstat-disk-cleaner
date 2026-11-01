@@ -48,7 +48,7 @@ function Test-BleachBitCategory {
     Assert-True ($details -match 'LocalAppData\\Temp' -and $details -match 'Windows\\Temp') 'Actual TEMP and protected Windows Temp are displayed'
     Assert-True ($details -match 'system.tmp' -and $details -match '6.0.6') 'Exactly one audited cleaner option and version are shown'
     Assert-True ($details.Contains('recent-arbitrary.data')) 'The real engine preview includes recent non-tmp payloads'
-    Assert-True ($details -match '\r\n(?:Version|版本)') 'Scope details use native edit CRLF line breaks'
+    Assert-True ($details -match '\r\n(?:Version|版本)' -and $details -notmatch '\\\r?\n') 'Scope details use native edit CRLF without stray escape characters'
     Assert-True ([TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_NH_NOTICE')) -match 'checkbox|勾选') `
         'The external scope is explicitly independent of candidate selection'
     Assert-Equal ([TestDesktop]::Message($dialog, 0x0400).ToInt32() -band 0xFFFF) 2 'Close is the default, not category cleanup'
@@ -56,6 +56,8 @@ function Test-BleachBitCategory {
     [void][TestDesktop]::PostMessage((Get-DialogControl $dialog 'IDC_NH_CLEAR'), 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero)
     $confirm = Get-BleachBitConfirmation $app
     Assert-Equal ([TestDesktop]::Message($confirm, 0x0400).ToInt32() -band 0xFFFF) 2 'The destructive confirmation defaults to Cancel'
+    $confirmationText = ([TestDesktop]::Children($confirm) | ForEach-Object { [TestDesktop]::Text($_) }) -join "`n"
+    Assert-True ($confirmationText -notmatch '\\\r?\n') 'The confirmation has no stray resource escape characters'
     Close-AppDialog $confirm
     foreach ($file in $before) { Assert-Equal (Get-FileHash -LiteralPath $file.Path).Hash $file.Hash 'Cancelling confirmation leaves every payload unchanged' }
     Close-AppDialog $dialog
@@ -87,6 +89,7 @@ function Test-BleachBitCategory {
     }
     $result = [TestDesktop]::ControlText((Get-DialogControl $dialog 'IDC_NH_DETAILS'))
     Assert-True ($result -match 'Files deleted: 2') 'The original engine output reports actual deleted file count'
+    Assert-True ($result -notmatch '\\\r?\n') 'Result numbers and paths have no stray resource escape characters'
     Assert-True ($result -match 'Follow-up preview remaining entry count: 0|清理后预览剩余条目数：0') 'A second real engine preview finds no eligible synthetic payloads'
     Assert-True ($result -match 'volume observation|磁盘观测') 'Volume change is not presented as attributed release'
     Assert-True (-not [TestDesktop]::IsWindowEnabled((Get-DialogControl $dialog 'IDC_NH_CLEAR'))) 'A completed scope cannot be replayed silently'
